@@ -44,7 +44,7 @@ from finn.custom_op.fpgadataflow import templates
 from finn.custom_op.fpgadataflow.hwcustomop import HWCustomOp
 from finn.custom_op.fpgadataflow.rtlbackend import RTLBackend
 from finn.transformation.fpgadataflow.annotate_cycles import AnnotateCycles
-from finn.util.basic import make_build_dir, tcl_string
+from finn.util.basic import make_build_dir, tcl_list, tcl_string
 from finn.util.create import adjacency_list
 from finn.util.data_packing import npy_to_rtlsim_input, rtlsim_output_to_npy
 from finn.util.launcher import run_tool
@@ -909,7 +909,7 @@ class FINNLoop(HWCustomOp, RTLBackend):
             dwc_rtllib_dir + "vpc.sv",
         ]
         for f in sourcefiles:
-            cmd += ["add_files -norecurse %s" % tcl_string(f)]
+            cmd += ["add_files -norecurse %s" % tcl_list(f)]
 
         adj_list = adjacency_list(
             loop_body,

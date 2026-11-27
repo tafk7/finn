@@ -39,7 +39,7 @@ from finn.custom_op.fpgadataflow.elementwise_binary import ElementwiseBinaryOper
 from finn.custom_op.fpgadataflow.hls import register_custom_op
 from finn.custom_op.fpgadataflow.hlsbackend import HLSBackend
 from finn.util import releases
-from finn.util.basic import get_vivado_version, is_versal, tcl_string
+from finn.util.basic import get_vivado_version, is_versal, tcl_list
 from finn.util.data_packing import (
     hls_datatype_str,
     npy_to_rtlsim_input,
@@ -706,7 +706,7 @@ out0_V.write(out_t);
                 ms_rtllib_dir + "memstream.sv",
             ]
             for f in sourcefiles:
-                cmd += ["add_files -norecurse %s" % tcl_string(f)]
+                cmd += ["add_files -norecurse %s" % tcl_list(f)]
             strm_inst = node_name + "_wstrm"
             cmd.append(
                 "create_bd_cell -type hier -reference %s /%s/%s"

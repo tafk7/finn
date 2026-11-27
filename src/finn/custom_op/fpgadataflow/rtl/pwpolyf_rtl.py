@@ -14,7 +14,7 @@ from finn.custom_op.general.pwpolyfunction import (
     SUPPORTED_FUNCS,
     _fit_coefficients,
 )
-from finn.util.basic import fifo_rtl_files, tcl_string
+from finn.util.basic import fifo_rtl_files, tcl_list
 from finn.util.data_packing import array2hexstring
 
 
@@ -162,7 +162,7 @@ class PWPolyF_rtl(PWPolyF, RTLBackend):
         """Constructs and returns the TCL for node instantiation in Vivado IPI."""
         cmd = []
         for f in self.get_rtl_file_list(abspath=True):
-            cmd.append("add_files -norecurse %s" % tcl_string(f))
+            cmd.append("add_files -norecurse %s" % tcl_list(f))
         cmd.append(
             "create_bd_cell -type module -reference %s %s"
             % (self.get_nodeattr("gen_top_module"), self.onnx_node.name)

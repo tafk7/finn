@@ -36,7 +36,7 @@ from finn.util.basic import (
     DSP_VERSIONS,
     get_dsp_datapath_limits,
     resolve_dsp_block,
-    tcl_string,
+    tcl_list,
 )
 from finn.util.data_packing import npy_to_rtlsim_input, rtlsim_output_to_npy
 
@@ -218,7 +218,7 @@ class MVAU_rtl(MVAU, RTLBackend):
         ] + [rtllib_dir + _ for _ in sourcefiles]
 
         for f in sourcefiles:
-            cmd.append("add_files -norecurse %s" % tcl_string(f))
+            cmd.append("add_files -norecurse %s" % tcl_list(f))
         if self.get_nodeattr("mem_mode") in [
             "internal_decoupled",
             "dynamic",

@@ -260,6 +260,12 @@ def tcl_string(value: object) -> str:
     return '"%s"' % re.sub(r'([\\$\[\]"])', r"\\\1", str(value))
 
 
+def tcl_list(*values: object) -> str:
+    """Quote values as a Tcl list. Vivado reads each file argument of add_files as a list,
+    so a path with a space, quoted as one word, still names two files."""
+    return "[list %s]" % " ".join(tcl_string(v) for v in values)
+
+
 def make_build_dir(prefix: str = "") -> str:
     """Creates a folder with given prefix to be used as a build dir.
     Use this function instead of tempfile.mkdtemp to ensure any generated files

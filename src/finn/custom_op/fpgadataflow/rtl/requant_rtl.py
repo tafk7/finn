@@ -13,7 +13,7 @@ from finn.util.basic import (
     make_build_dir,
     resolve_dsp_block,
     roundup_to_integer_multiple,
-    tcl_string,
+    tcl_list,
 )
 from finn.util.data_packing import npy_to_rtlsim_input, rtlsim_output_to_npy
 from finn.util.mlo import mlo_set_select_bits
@@ -639,7 +639,7 @@ class Requant_rtl(Requant, RTLBackend):
 
         cmd = []
         for f in sourcefiles:
-            cmd += ["add_files -norecurse %s" % tcl_string(f)]
+            cmd += ["add_files -norecurse %s" % tcl_list(f)]
         cmd += [
             "create_bd_cell -type module -reference %s %s"
             % (self.get_nodeattr("gen_top_module"), self.onnx_node.name)
@@ -679,7 +679,7 @@ class Requant_rtl(Requant, RTLBackend):
 
         # Compute core
         for f in self.get_rtl_file_list(abspath=True):
-            cmd.append("add_files -norecurse %s" % tcl_string(f))
+            cmd.append("add_files -norecurse %s" % tcl_list(f))
         cmd.append(
             "create_bd_cell -type module -reference %s /%s/%s" % (top_module, node_name, node_name)
         )
@@ -704,7 +704,7 @@ class Requant_rtl(Requant, RTLBackend):
         axi_dir = resources.join("rtllib", "axi/hdl/")
         ms_dir = resources.join("rtllib", "memstream/hdl/")
         for f in [axi_dir + "axilite.sv", ms_dir + "memstream_axi.sv", ms_dir + "memstream.sv"]:
-            cmd.append("add_files -norecurse %s" % tcl_string(f))
+            cmd.append("add_files -norecurse %s" % tcl_list(f))
 
         # Unified param memstreamer feeding the core's s_params_V port.
         # In MLO mode the external set-select pin (in1_V) drives the

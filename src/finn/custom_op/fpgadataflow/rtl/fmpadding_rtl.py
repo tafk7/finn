@@ -33,7 +33,7 @@ from qonnx.util.basic import roundup_to_integer_multiple
 from finn import resources
 from finn.custom_op.fpgadataflow.fmpadding import FMPadding
 from finn.custom_op.fpgadataflow.rtlbackend import RTLBackend
-from finn.util.basic import tcl_string
+from finn.util.basic import tcl_list
 
 
 class FMPadding_rtl(FMPadding, RTLBackend):
@@ -164,7 +164,7 @@ class FMPadding_rtl(FMPadding, RTLBackend):
         """Constructs and returns the TCL for node instantiation in Vivado IPI."""
         cmd = []
         for f in self.get_rtl_file_list(abspath=True):
-            cmd.append("add_files -norecurse %s" % tcl_string(f))
+            cmd.append("add_files -norecurse %s" % tcl_list(f))
         cmd.append(
             "create_bd_cell -type module -reference %s %s"
             % (self.get_nodeattr("gen_top_module"), self.onnx_node.name)

@@ -43,7 +43,7 @@ from qonnx.util.basic import (
 from finn import resources
 from finn.custom_op.fpgadataflow.hwcustomop import HWCustomOp
 from finn.transformation.fpgadataflow.fifo_sizing.tav import load_tav_npy, save_tav_npy
-from finn.util.basic import fifo_rtl_files, is_versal, least_divisor_at_most, tcl_string
+from finn.util.basic import fifo_rtl_files, is_versal, least_divisor_at_most, tcl_list
 from finn.util.data_packing import (
     hls_datatype_str,
     numpy_to_hls_code,
@@ -1177,7 +1177,7 @@ class MVAU(HWCustomOp):
                         dyn_rtllib_dir + "dynamic_load.sv",
                     ]
                     for f in sourcefiles:
-                        cmd += ["add_files -norecurse %s" % tcl_string(f)]
+                        cmd += ["add_files -norecurse %s" % tcl_list(f)]
                     strm_inst = node_name + "_wdynld"
                     strm_out_name = "m_axis_0"
 
@@ -1236,7 +1236,7 @@ class MVAU(HWCustomOp):
                         if file.endswith(".sv") or file.endswith(".svh"):
                             sourcefiles.append(os.path.join(dma_rtllib_dir + "cdma_x/", file))
                     for f in sourcefiles:
-                        cmd += ["add_files -norecurse %s" % tcl_string(f)]
+                        cmd += ["add_files -norecurse %s" % tcl_list(f)]
                     strm_inst = node_name + "_fetch_weights"
                     strm_out_name = "out0_V"
                     # update intf dict to remove weights input and replace with index/tap input
@@ -1261,7 +1261,7 @@ class MVAU(HWCustomOp):
                         ms_rtllib_dir + "memstream.sv",
                     ]
                     for f in sourcefiles:
-                        cmd += ["add_files -norecurse %s" % tcl_string(f)]
+                        cmd += ["add_files -norecurse %s" % tcl_list(f)]
                     strm_inst = node_name + "_wstrm"
                     strm_out_name = "m_axis_0"
 

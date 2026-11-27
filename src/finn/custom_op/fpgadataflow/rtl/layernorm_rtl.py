@@ -17,7 +17,7 @@ import os
 from finn import resources
 from finn.custom_op.fpgadataflow.layernorm import LayerNorm
 from finn.custom_op.fpgadataflow.rtlbackend import RTLBackend
-from finn.util.basic import arith_rtl_files, fifo_rtl_files, tcl_string
+from finn.util.basic import arith_rtl_files, fifo_rtl_files, tcl_list
 
 
 class LayerNorm_rtl(LayerNorm, RTLBackend):
@@ -95,7 +95,7 @@ class LayerNorm_rtl(LayerNorm, RTLBackend):
     def code_generation_ipi(self):
         cmd = []
         for f in self.get_rtl_file_list(abspath=True):
-            cmd.append("add_files -norecurse %s" % tcl_string(f))
+            cmd.append("add_files -norecurse %s" % tcl_list(f))
         cmd.append(
             "create_bd_cell -type module -reference %s %s"
             % (self.get_nodeattr("gen_top_module"), self.onnx_node.name)

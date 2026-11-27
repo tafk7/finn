@@ -12,7 +12,7 @@ from qonnx.core.datatype import DataType
 from finn import resources
 from finn.custom_op.fpgadataflow.inner_shuffle import InnerShuffle
 from finn.custom_op.fpgadataflow.rtlbackend import RTLBackend
-from finn.util.basic import fifo_rtl_files, tcl_string
+from finn.util.basic import fifo_rtl_files, tcl_list
 
 
 class InnerShuffle_rtl(InnerShuffle, RTLBackend):
@@ -90,7 +90,7 @@ class InnerShuffle_rtl(InnerShuffle, RTLBackend):
         top_module = self.get_nodeattr("gen_top_module")
         cmd = []
         for f in self.get_rtl_file_list(abspath=True):
-            cmd.append(f"add_files -norecurse {tcl_string(f)}")
+            cmd.append(f"add_files -norecurse {tcl_list(f)}")
         cmd.append(f"create_bd_cell -type module -reference {top_module} {self.onnx_node.name}")
         return cmd
 

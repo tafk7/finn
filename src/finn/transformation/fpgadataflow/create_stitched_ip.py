@@ -41,7 +41,7 @@ from finn.analysis.fpgadataflow.stream_compatibility import stream_compatibility
 from finn.transformation.fpgadataflow.replace_verilog_relpaths import (
     ReplaceVerilogRelPaths,
 )
-from finn.util.basic import make_build_dir, tcl_string
+from finn.util.basic import make_build_dir, tcl_list, tcl_string
 from finn.util.fpgadataflow import is_hls_node, is_rtl_node
 from finn.util.launcher import run_tool
 
@@ -180,7 +180,7 @@ class CreateStitchedIP(Transformation):
         domain = resources.join("rtllib", "clk2x_gen", "hdl", "clk2x_domain.v")
         generator = resources.join("rtllib", "clk2x_gen", "clk2x_gen.tcl")
         self.create_cmds += [
-            "add_files -norecurse %s" % tcl_string(domain),
+            "add_files -norecurse %s" % tcl_list(domain),
             "source %s" % tcl_string(generator),
             "clk2x_gen_create %r %s/clk2x_gen.json %s/clk2x_gen.xdc finn_clk2x_%s"
             % (1000.0 / self.clk_ns, self.proj_dir, self.proj_dir, block_name),
@@ -463,7 +463,7 @@ class CreateStitchedIP(Transformation):
         self.connect_cmds.append("assign_bd_address")
 
     def insert_sim_ctrl(self):
-        sim_ctrl_src = tcl_string(resources.join("rtllib", "sim/hdl/sim_ctrl.v"))
+        sim_ctrl_src = tcl_list(resources.join("rtllib", "sim/hdl/sim_ctrl.v"))
         sim_ctrl_name = "sim_ctrl_0"
         self.create_cmds.append("add_files -norecurse %s" % sim_ctrl_src)
         self.create_cmds.append(

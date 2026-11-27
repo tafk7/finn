@@ -132,6 +132,24 @@ def test_hls_include_paths_reach_the_compiler_whole(state, tmp_path, monkeypatch
     assert shlex.split(result.stdout) == ["-std=c++14", *("-I" + str(i) for i in includes)]
 
 
+# Vivado reads each file argument of add_files as a list of files.
+VIVADO_ADD_FILES = """proc add_files {args} {
+    foreach arg $args {
+        if {[string match -* $arg]} continue
+        foreach file $arg {puts $file}
+    }
+}
+"""
+
+
+def tclsh(tmp_path, script):
+    """The output of a Tcl script, which fails on its first error."""
+    (tmp_path / "script.tcl").write_text(script)
+    result = subprocess.run(["tclsh", tmp_path / "script.tcl"], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    return result.stdout
+
+
 @pytest.mark.skipif(not shutil.which("tclsh"), reason="tclsh is not installed")
 def test_rtl_resources_reach_ipi_tcl_as_one_file_each(state, tmp_path, monkeypatch):
     from onnx import helper  # noqa: PLC0415
@@ -177,15 +195,9 @@ def test_rtl_resources_reach_ipi_tcl_as_one_file_each(state, tmp_path, monkeypat
         ),
     ]
     commands = [c for n in nodes for c in getCustomOp(n).code_generation_ipi() if "add_files" in c]
-    stub = "proc add_files {args} {puts [llength $args]; puts [lindex $args end]}\n"
-    result = subprocess.run(
-        ["tclsh"], input=stub + "\n".join(commands), capture_output=True, text=True, cwd=tmp_path
-    )
-    assert result.returncode == 0, result.stderr
-    lines = result.stdout.splitlines()
-    assert lines[::2] == ["2"] * len(commands)  # -norecurse and one file
-    files = [Path(f) for f in lines[1::2]]
-    assert all(f.is_file() for f in files)
+    result = tclsh(tmp_path, VIVADO_ADD_FILES + "\n".join(commands))
+    files = [Path(f) for f in result.splitlines()]
+    assert len(files) == len(commands) and all(f.is_file() for f in files)
     assert [f.name for f in files if f.is_relative_to(rtllib)] == [
         "axilite.sv",
         "memstream_axi.sv",
@@ -193,6 +205,85 @@ def test_rtl_resources_reach_ipi_tcl_as_one_file_each(state, tmp_path, monkeypat
         "fifo_gauge.sv",
         "fifo.sv",
     ]
+
+
+@pytest.mark.skipif(not shutil.which("tclsh"), reason="tclsh is not installed")
+@pytest.mark.parametrize("name", ["rtl lib", 'rtl lib $HOME [x] "q"'])
+def test_a_stitched_project_reads_rtl_resources_whole(name, state, tmp_path, monkeypatch):
+    from onnx import TensorProto, helper  # noqa: PLC0415
+    from qonnx.core.datatype import DataType  # noqa: PLC0415
+    from qonnx.core.modelwrapper import ModelWrapper  # noqa: PLC0415
+    from qonnx.transformation.general import GiveUniqueNodeNames  # noqa: PLC0415
+    from qonnx.util.basic import gen_finn_dt_tensor, qonnx_make_model  # noqa: PLC0415
+
+    import finn.transformation.fpgadataflow.create_stitched_ip as stitch  # noqa: PLC0415
+    from finn.transformation.fpgadataflow.insert_fifo import InsertFIFO  # noqa: PLC0415
+    from finn.transformation.fpgadataflow.prepare_ip import PrepareIP  # noqa: PLC0415
+    from finn.transformation.fpgadataflow.specialize_layers import (  # noqa: PLC0415
+        SpecializeLayers,
+    )
+
+    rtllib = tmp_path / name
+    shutil.copytree(resources.path("rtllib"), rtllib)
+    monkeypatch.setenv("FINN_RESOURCES_RTLLIB", str(rtllib))
+    build = tmp_path / "build"
+    monkeypatch.setenv("FINN_BUILD_DIR", str(build))
+    # An RTL MVAU with its weights in a memstream, between RTL FIFOs: no tool generates them.
+    mvau = helper.make_node(
+        "MVAU",
+        ["in", "weights"],
+        ["out"],
+        domain="finn.custom_op.fpgadataflow",
+        backend="fpgadataflow",
+        MW=8,
+        MH=8,
+        SIMD=2,
+        PE=2,
+        inputDataType="INT8",
+        weightDataType="INT8",
+        outputDataType="INT32",
+        noActivation=1,
+        mem_mode="internal_decoupled",
+        preferred_impl_style="rtl",
+    )
+    graph = helper.make_graph(
+        [mvau],
+        "mvau",
+        [helper.make_tensor_value_info("in", TensorProto.FLOAT, [1, 8])],
+        [helper.make_tensor_value_info("out", TensorProto.FLOAT, [1, 8])],
+    )
+    model = ModelWrapper(qonnx_make_model(graph))
+    for tensor, dt in (("in", "INT8"), ("weights", "INT8"), ("out", "INT32")):
+        model.set_tensor_datatype(tensor, DataType[dt])
+    model.set_initializer("weights", gen_finn_dt_tensor(DataType["INT8"], (8, 8)))
+    part = "xczu3eg-sbva484-1-e"
+    model = model.transform(InsertFIFO(create_shallow_fifos=True))
+    model = model.transform(SpecializeLayers(part))
+    model = model.transform(GiveUniqueNodeNames())
+    model = model.transform(PrepareIP(part, 5))
+
+    class Stop(Exception):
+        pass
+
+    def vivado(command, cwd, **kwargs):
+        raise Stop(Path(cwd) / "make_project.tcl")
+
+    monkeypatch.setattr(stitch, "run_tool", vivado)
+    with pytest.raises(Stop) as stopped:
+        model.transform(stitch.CreateStitchedIP(part, 5))
+    project = stopped.value.args[0].read_text().splitlines()
+    commands = [c for c in project if c.startswith(("add_files", "set_property ip_repo_paths"))]
+    repositories = "proc current_project {} {}\nproc set_property {name dirs args} {%s}\n" % (
+        "foreach dir $dirs {puts $dir}"
+    )
+    result = tclsh(tmp_path, VIVADO_ADD_FILES + repositories + "\n".join(commands))
+    paths = [Path(p) for p in result.splitlines()]
+    assert [p for p in paths if not (p.is_relative_to(rtllib) or p.is_relative_to(build))] == []
+    resources_read = [p for p in paths if p.is_relative_to(rtllib)]
+    assert all(p.exists() for p in resources_read)
+    assert {"memstream", "fifo.sv", "memstream.sv", "mvu.sv", "sim_ctrl.v"} <= {
+        p.name for p in resources_read
+    }
 
 
 def test_xsi_key_changes_with_flags_and_pybind_version(state, monkeypatch):

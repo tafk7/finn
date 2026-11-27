@@ -30,7 +30,7 @@ import os
 from finn import resources
 from finn.custom_op.fpgadataflow.rtlbackend import RTLBackend
 from finn.custom_op.fpgadataflow.streamingfifo import StreamingFIFO
-from finn.util.basic import fifo_rtl_files, tcl_string
+from finn.util.basic import fifo_rtl_files, tcl_list
 
 
 class StreamingFIFO_rtl(StreamingFIFO, RTLBackend):
@@ -98,7 +98,7 @@ class StreamingFIFO_rtl(StreamingFIFO, RTLBackend):
 
     def code_generation_ipi(self):
         cmd = [
-            "add_files -norecurse %s" % tcl_string(f) for f in self.get_rtl_file_list(abspath=True)
+            "add_files -norecurse %s" % tcl_list(f) for f in self.get_rtl_file_list(abspath=True)
         ]
         cmd += [
             "create_bd_cell -type module -reference %s %s"

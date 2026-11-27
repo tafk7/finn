@@ -42,7 +42,7 @@ from qonnx.util.basic import (
 
 from finn import resources
 from finn.custom_op.fpgadataflow.hwcustomop import HWCustomOp
-from finn.util.basic import tcl_string
+from finn.util.basic import tcl_list
 from finn.util.data_packing import (
     hls_datatype_str,
     numpy_to_hls_code,
@@ -826,7 +826,7 @@ class VVAU(HWCustomOp):
                 ms_rtllib_dir + "memstream.sv",
             ]
             for f in sourcefiles:
-                cmd += ["add_files -norecurse %s" % tcl_string(f)]
+                cmd += ["add_files -norecurse %s" % tcl_list(f)]
             strm_inst = node_name + "_wstrm"
             cmd.append(
                 "create_bd_cell -type hier -reference %s /%s/%s"

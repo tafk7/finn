@@ -322,30 +322,30 @@ set_property -dict [list \
 ] [get_ips cdma_datamover]
 
 set finn_rtllib @RTLLIB@
-add_files -norecurse "$finn_rtllib/cdma/cdma_top.sv"
-add_files -norecurse "$finn_rtllib/cdma/krnl_counter.sv"
-add_files -norecurse "$finn_rtllib/cdma/cdma_a/cdma_a.sv"
-add_files -norecurse "$finn_rtllib/cdma/cdma_a/cdma_a_rd.sv"
-add_files -norecurse "$finn_rtllib/cdma/cdma_a/cdma_a_wr.sv"
-add_files -norecurse "$finn_rtllib/cdma/cdma_a/axi_dma_rd_a.sv"
-add_files -norecurse "$finn_rtllib/cdma/cdma_a/axi_dma_wr_a.sv"
-add_files -norecurse "$finn_rtllib/cdma/cdma_u/cdma_u.sv"
-add_files -norecurse "$finn_rtllib/cdma/cdma_u/cdma_u_wr.sv"
-add_files -norecurse "$finn_rtllib/cdma/cdma_u/axi_dma_rd_u.sv"
-add_files -norecurse "$finn_rtllib/cdma/cdma_u/axi_dma_wr_u.sv"
-add_files -norecurse "$finn_rtllib/cdma/cdma_x/cdma_x.sv"
-add_files -norecurse "$finn_rtllib/cdma/cdma_x/cdma_x_rd.sv"
-add_files -norecurse "$finn_rtllib/cdma/cdma_x/cdma_x_wr.sv"
-add_files -norecurse "$finn_rtllib/skid/skid.sv"
-add_files -norecurse "$finn_rtllib/mlo/infrastructure/intermediate_frames.sv"
-add_files -norecurse "$finn_rtllib/mlo/infrastructure/mux.sv"
-add_files -norecurse "$finn_rtllib/mlo/infrastructure/demux.sv"
-add_files -norecurse "$finn_rtllib/mlo/loop_control.sv"
-add_files -norecurse "$finn_rtllib/mlo/address_config.sv"
-add_files -norecurse "$finn_rtllib/axi/hdl/axilite.sv"
+add_files -norecurse [list "$finn_rtllib/cdma/cdma_top.sv"]
+add_files -norecurse [list "$finn_rtllib/cdma/krnl_counter.sv"]
+add_files -norecurse [list "$finn_rtllib/cdma/cdma_a/cdma_a.sv"]
+add_files -norecurse [list "$finn_rtllib/cdma/cdma_a/cdma_a_rd.sv"]
+add_files -norecurse [list "$finn_rtllib/cdma/cdma_a/cdma_a_wr.sv"]
+add_files -norecurse [list "$finn_rtllib/cdma/cdma_a/axi_dma_rd_a.sv"]
+add_files -norecurse [list "$finn_rtllib/cdma/cdma_a/axi_dma_wr_a.sv"]
+add_files -norecurse [list "$finn_rtllib/cdma/cdma_u/cdma_u.sv"]
+add_files -norecurse [list "$finn_rtllib/cdma/cdma_u/cdma_u_wr.sv"]
+add_files -norecurse [list "$finn_rtllib/cdma/cdma_u/axi_dma_rd_u.sv"]
+add_files -norecurse [list "$finn_rtllib/cdma/cdma_u/axi_dma_wr_u.sv"]
+add_files -norecurse [list "$finn_rtllib/cdma/cdma_x/cdma_x.sv"]
+add_files -norecurse [list "$finn_rtllib/cdma/cdma_x/cdma_x_rd.sv"]
+add_files -norecurse [list "$finn_rtllib/cdma/cdma_x/cdma_x_wr.sv"]
+add_files -norecurse [list "$finn_rtllib/skid/skid.sv"]
+add_files -norecurse [list "$finn_rtllib/mlo/infrastructure/intermediate_frames.sv"]
+add_files -norecurse [list "$finn_rtllib/mlo/infrastructure/mux.sv"]
+add_files -norecurse [list "$finn_rtllib/mlo/infrastructure/demux.sv"]
+add_files -norecurse [list "$finn_rtllib/mlo/loop_control.sv"]
+add_files -norecurse [list "$finn_rtllib/mlo/address_config.sv"]
+add_files -norecurse [list "$finn_rtllib/axi/hdl/axilite.sv"]
 add_files -norecurse "@TOP_VERILOG_FILE@"
-add_files -norecurse "$finn_rtllib/fifo/hdl/fifo_gauge.sv"
-add_files -norecurse "$finn_rtllib/fifo/hdl/fifo.sv"
+add_files -norecurse [list "$finn_rtllib/fifo/hdl/fifo_gauge.sv"]
+add_files -norecurse [list "$finn_rtllib/fifo/hdl/fifo.sv"]
 
 @IP_GEN@
 
