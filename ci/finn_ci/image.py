@@ -40,6 +40,7 @@ INPUTS = (
     "docker/Dockerfile",
     "docker/entrypoint.sh",
     "docker/profile.sh",
+    "scripts/xilinx-release.sh",
     "docker/identity.py",
     "docker/install-runtimes.sh",
     "docker/runtimes/*.env",

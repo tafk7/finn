@@ -8,7 +8,8 @@
 # shell would natively (and the image's XRT setup, when it has XRT). A job that names
 # the release with run-docker.sh's FINN_XILINX_PATH and FINN_XILINX_VERSION instead
 # gets the same, in either of AMD's layouts, and the names run-docker.sh gave the
-# release (VIVADO_PATH, VITIS_PATH, HLS_PATH), which a site's LSF wrapper forwards.
+# release (VIVADO_PATH, VITIS_PATH, HLS_PATH), which a site's LSF wrapper forwards:
+# scripts/xilinx-release.sh, which CI's native stage sources as well.
 #
 # A caller's BASH_ENV (a site's, such as an LSF kit's enable.sh) replaces the image's
 # one: this keeps its own and sources the caller's after it, on every bash.
@@ -26,62 +27,21 @@ if [ -z "${FINN_PROFILE:-}" ]; then
         export NSS_WRAPPER_PASSWD="$FINN_HOME/identity/$(id -u)/passwd"
         export NSS_WRAPPER_GROUP="$FINN_HOME/identity/$(id -u)/group"
     fi
-    if [ -z "${XILINX_VIVADO:-}" ] && [ -n "${FINN_XILINX_PATH:-}" ] \
-        && [ -n "${FINN_XILINX_VERSION:-}" ]; then
-        # <path>/<release>/Vivado from 2025.1, <path>/Vivado/<release> before.
-        for finn_vivado in "$FINN_XILINX_PATH/$FINN_XILINX_VERSION/Vivado" \
-            "$FINN_XILINX_PATH/Vivado/$FINN_XILINX_VERSION"; do
-            if [ -f "$finn_vivado/settings64.sh" ]; then
-                export XILINX_VIVADO="$finn_vivado"
-                # Vitis and (before 2024.2) Vitis HLS are its siblings, in either layout.
-                finn_vitis=$(dirname "$finn_vivado")/Vitis
-                finn_hls=$(dirname "$finn_vivado")/Vitis_HLS
-                case $finn_vivado in
-                    */Vivado/"$FINN_XILINX_VERSION")
-                        finn_vitis=$FINN_XILINX_PATH/Vitis/$FINN_XILINX_VERSION
-                        finn_hls=$FINN_XILINX_PATH/Vitis_HLS/$FINN_XILINX_VERSION
-                        ;;
-                esac
-                break
-            fi
-        done
-        unset finn_vivado
-        if [ -z "${XILINX_VIVADO:-}" ]; then
-            echo "finn: no settings64.sh for FINN_XILINX_VERSION=$FINN_XILINX_VERSION under" \
-                "FINN_XILINX_PATH=$FINN_XILINX_PATH (in <path>/<version>/Vivado or" \
-                "<path>/Vivado/<version>)" >&2
-            # Unmarked, so that the entrypoint's own sourcing fails too and stops the start.
-            unset FINN_PROFILE
-            return 1
-        fi
+    # The release (scripts/xilinx-release.sh, which a native shell sources too): in
+    # the image at /opt/finn, in a checkout beside docker/.
+    finn_release=/opt/finn/xilinx-release.sh
+    case ${BASH_SOURCE:-} in
+        docker/profile.sh | */docker/profile.sh)
+            finn_release=${BASH_SOURCE%docker/profile.sh}scripts/xilinx-release.sh
+            ;;
+    esac
+    if ! . "$finn_release"; then
+        unset finn_release
+        # Unmarked, so that the entrypoint's own sourcing fails too and stops the start.
+        unset FINN_PROFILE
+        return 1
     fi
-    # env scripts may return non-zero, so do not let that abort the container
-    if [ -n "${XILINX_VIVADO:-}" ] && [ -f "$XILINX_VIVADO/settings64.sh" ]; then
-        . "$XILINX_VIVADO/settings64.sh" >/dev/null 2>&1 || true
-    fi
-    # A job's separate trees (Vivado/<release>, Vitis/<release>): what Vivado's
-    # settings64.sh did not set up, as run-docker.sh's entrypoint sourced them.
-    if [ -z "${XILINX_VITIS:-}" ] && [ -n "${finn_vitis:-}" ] \
-        && [ -f "$finn_vitis/settings64.sh" ]; then
-        export XILINX_VITIS="$finn_vitis"
-        . "$finn_vitis/settings64.sh" >/dev/null 2>&1 || true
-    fi
-    if [ -z "${XILINX_HLS:-}" ] && [ -n "${finn_hls:-}" ] \
-        && [ -f "$finn_hls/settings64.sh" ]; then
-        export XILINX_HLS="$finn_hls"
-        . "$finn_hls/settings64.sh" >/dev/null 2>&1 || true
-    fi
-    unset finn_vitis finn_hls
-    # run-docker.sh's names for the release, which an LSF wrapper forwards to the farm.
-    if [ -n "${XILINX_VIVADO:-}" ]; then
-        export VIVADO_PATH="${VIVADO_PATH:-$XILINX_VIVADO}"
-    fi
-    if [ -n "${XILINX_VITIS:-}" ]; then
-        export VITIS_PATH="${VITIS_PATH:-$XILINX_VITIS}"
-    fi
-    if [ -n "${XILINX_HLS:-${XILINX_VITIS:-}}" ]; then
-        export HLS_PATH="${HLS_PATH:-${XILINX_HLS:-$XILINX_VITIS}}"
-    fi
+    unset finn_release
     if [ -f /opt/xilinx/xrt/setup.sh ]; then
         . /opt/xilinx/xrt/setup.sh >/dev/null 2>&1 || true
     fi

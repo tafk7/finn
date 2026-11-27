@@ -17,6 +17,7 @@ from finn.util import launcher
 
 REPO = Path(__file__).resolve().parents[2]
 PROFILE_SH = str(REPO / "docker/profile.sh")
+RELEASE_SH = str(REPO / "scripts/xilinx-release.sh")
 sys.path.insert(0, str(REPO / "docker"))
 
 pytestmark = pytest.mark.util
@@ -229,6 +230,81 @@ def test_a_jobs_missing_release_stops_the_container_start(tmp_path):
         },
     )
     assert proc.returncode == 1 and "started" not in proc.stdout
+    assert "no settings64.sh for FINN_XILINX_VERSION=2024.2" in proc.stderr
+
+
+# --------------------------------------------------------------------------
+# scripts/xilinx-release.sh: the release lookup the profile and CI's native
+# stage share (that stage: tests/util/test_finn_ci_local_setup.py).
+# --------------------------------------------------------------------------
+
+
+def release_tree(root, layout, version):
+    """A fake release: Vivado and Vitis in layout, each settings64.sh noting itself."""
+    trees = {}
+    for tool in ("Vivado", "Vitis"):
+        trees[tool] = root / layout.format(tool=tool, version=version)
+        trees[tool].mkdir(parents=True)
+        (trees[tool] / "settings64.sh").write_text(
+            f'export PATH="{trees[tool]}/bin:$PATH" SOURCED="$SOURCED {tool}"\n'
+        )
+    return trees
+
+
+def source_release(tmp_path, probe, **env):
+    """Source scripts/xilinx-release.sh under POSIX sh, as CI's stage does under -e."""
+    return subprocess.run(
+        ["/bin/sh", "-c", f'set -e; . "$1"; {probe}', "sh", RELEASE_SH],
+        capture_output=True,
+        text=True,
+        env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), **env},
+    )
+
+
+@pytest.mark.parametrize(
+    "version, layout",
+    [("2024.2", "{tool}/{version}"), ("2025.2", "{version}/{tool}")],
+    ids=["separate-trees", "unified"],
+)
+def test_the_release_lookup_finds_either_layout_without_the_container(tmp_path, version, layout):
+    trees = release_tree(tmp_path / "Xilinx", layout, version)
+    job = {"FINN_XILINX_PATH": str(tmp_path / "Xilinx"), "FINN_XILINX_VERSION": version}
+    probe = (
+        'echo "$XILINX_VIVADO|$XILINX_VITIS|$VIVADO_PATH|$VITIS_PATH|$HLS_PATH|$SOURCED'
+        '|${finn_vivado-unset}${finn_vitis-unset}${finn_hls-unset}|${FINN_PROFILE-unset}"'
+    )
+    proc = source_release(tmp_path, probe, **job)
+    assert proc.returncode == 0, proc.stderr
+    (
+        vivado,
+        vitis,
+        vivado_path,
+        vitis_path,
+        hls_path,
+        sourced,
+        scratch,
+        marker,
+    ) = proc.stdout.strip().split("|")
+    assert vivado == vivado_path == str(trees["Vivado"])
+    assert vitis == vitis_path == hls_path == str(trees["Vitis"])
+    assert sourced.split() == ["Vivado", "Vitis"]
+    # It leaves no scratch behind and none of the container's own state.
+    assert scratch == "unset" * 3 and marker == "unset"
+
+
+def test_the_release_lookup_without_a_release_named_does_nothing(tmp_path):
+    proc = source_release(tmp_path, 'echo "${XILINX_VIVADO-unset}|${VIVADO_PATH-unset}"')
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == "unset|unset" and proc.stderr == ""
+
+
+def test_the_release_lookup_fails_loudly_on_a_missing_release(tmp_path):
+    (tmp_path / "Xilinx/Vivado/2024.1").mkdir(parents=True)
+    job = {"FINN_XILINX_PATH": str(tmp_path / "Xilinx"), "FINN_XILINX_VERSION": "2024.2"}
+    proc = source_release(tmp_path, "echo reached", **job)
+    # Under -e the caller stops there, with the job's names in the message.
+    assert proc.returncode == 1 and "reached" not in proc.stdout
+    assert f"FINN_XILINX_PATH={tmp_path}/Xilinx" in proc.stderr
     assert "no settings64.sh for FINN_XILINX_VERSION=2024.2" in proc.stderr
 
 

@@ -185,6 +185,8 @@ ENV FINN_RESOURCES_SYSTEM_CACHE=/opt/finn/resources
 # The container environment (docker/profile.sh): the caller's home and identity, and
 # AMD's environment sourced from the release the launcher names. The entrypoint
 # sources it; so do login shells and, through BASH_ENV, every bash `docker exec` starts.
+# The release lookup it shares with native shells and CI (scripts/xilinx-release.sh).
+COPY --chmod=0644 scripts/xilinx-release.sh /opt/finn/xilinx-release.sh
 COPY --chmod=0644 docker/profile.sh /etc/profile.d/finn.sh
 ENV BASH_ENV=/etc/profile.d/finn.sh
 RUN echo '. /etc/profile.d/finn.sh' >> /etc/bash.bashrc

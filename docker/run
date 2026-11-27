@@ -107,7 +107,7 @@ def amd_tools(args, env):
         selected = Path(vivado).absolute().parents[1]
         root = Path(vivado).resolve().parents[1]
     else:
-        # docker/profile.sh finds the release under it, in either layout.
+        # The container finds the release under it (scripts/xilinx-release.sh), in either layout.
         selected = install.absolute()
         root = install.resolve()
     # The container needs the tree at its canonical path, which AMD's settings scripts

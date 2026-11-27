@@ -254,7 +254,7 @@ Vivado; the pinned Tcl declares Vivado 2025.2.
 | `run-docker.sh build_dataflow DIR` | `docker/run --fpga -v DIR:DIR -- build_dataflow DIR` |
 | `run-docker.sh notebook` | `docker/run --notebook` |
 | `scripts/finn-env.sh` | `source .venv/bin/activate` after `uv sync`, with the AMD tools from a sourced `settings64.sh` |
-| `FINN_XILINX_PATH`, `FINN_XILINX_VERSION` | `XILINX_VIVADO`, from a sourced `settings64.sh` or set to `<root>/<release>/Vivado`; both still read when it is unset |
+| `FINN_XILINX_PATH`, `FINN_XILINX_VERSION` | `XILINX_VIVADO`, from a sourced `settings64.sh` or set to `<root>/<release>/Vivado`; both still read when it is unset, by the container and natively by `. scripts/xilinx-release.sh` |
 | `VIVADO_PATH`, `VITIS_PATH`, `HLS_PATH` | `XILINX_VIVADO`, `XILINX_VITIS`, `XILINX_HLS`; the container still sets the old names for a site's wrappers |
 | `fetch-repos.sh`, Python clones in `deps/` | `uv.lock` and verified resources |
 | `deps/pynq_golden` | `$FINN_HOME/golden`, or `FINN_GOLDEN_DIR` |

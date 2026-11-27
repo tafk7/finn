@@ -528,7 +528,8 @@ void stageZipArtifacts(Map entry, String buildDir, String stashName) {
   }
 }
 
-// The native stage needs apt prerequisites, Python 3.12 and pyproject.toml's uv on PATH.
+// The native stage needs apt prerequisites, Python 3.12 and pyproject.toml's uv on PATH,
+// and the AMD release FINN_XILINX_PATH and FINN_XILINX_VERSION name on the node.
 // Override FINN_LOCAL_BUILD_LABEL when the main build pool lacks those.
 void runLocalSetupTest() {
   node(finnLocalBuildLabel()) {
@@ -565,8 +566,13 @@ ${CI_TOOL} prune-pip-cache \\
           cleanPreviousBuildFiles(buildDir)
           catchError(stageResult: 'FAILURE') {
             sh 'uv sync --locked'
+            // The job names the release as for run-docker.sh (FINN_XILINX_PATH and
+            // FINN_XILINX_VERSION): the container's own lookup gives XILINX_VIVADO and
+            // AMD's environment here too, and fails the stage when that release is not
+            // there. The venv after it, so its Python comes ahead of the release's tools.
             sh '''#!/bin/bash
 set -eo pipefail
+. scripts/xilinx-release.sh
 source .venv/bin/activate
 ./scripts/quicktest-local.sh vivado
 '''
