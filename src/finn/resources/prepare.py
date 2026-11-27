@@ -134,6 +134,9 @@ def golden() -> str:
         )
     identity = _golden_identity()
     digest = _golden_digest(identity)
+    # A complete entry is final: reading it needs no lock, so a read-only cache serves.
+    if _store.complete(output, digest):
+        return str(output)
     source = Path(resources.path("pynq"))
     with _store.locked(output.parent, output.name) as entry:
         if not _store.complete(entry, digest):

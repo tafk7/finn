@@ -257,6 +257,26 @@ def test_site_golden_directory_is_used_as_supplied(state, tmp_path, monkeypatch)
     assert prepare.golden() == str(site / "vck190")
 
 
+def test_a_built_golden_reference_is_read_from_a_read_only_cache(state, tmp_path, monkeypatch):
+    monkeypatch.setenv("XILINX_VIVADO", str(vivado(tmp_path)))
+    pynq = tmp_path / "pynq"
+    pynq.mkdir()
+    (pynq / "Makefile").write_text(
+        "all:\n\tfor f in golden_noc.ncr golden_routed.dcp golden.tcl; do echo $$f > $$f; done\n"
+    )
+    monkeypatch.setenv("FINN_RESOURCES_PYNQ", str(pynq))
+    built = prepare.golden()
+    assert all((Path(built) / f).is_file() for f in prepare.GOLDEN_FILES)
+    paths = [state / "golden", *(state / "golden").rglob("*")]
+    for path in paths:
+        path.chmod(0o555 if path.is_dir() else 0o444)
+    try:
+        assert prepare.golden() == built
+    finally:
+        for path in paths:
+            path.chmod(0o755 if path.is_dir() else 0o644)
+
+
 def test_clean_removes_keyed_state_but_not_site_state(state, tmp_path, capsys, monkeypatch):
     monkeypatch.setenv("XILINX_VIVADO", str(vivado(tmp_path)))
     entries = {
