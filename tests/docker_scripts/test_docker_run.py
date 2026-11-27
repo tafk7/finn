@@ -82,6 +82,15 @@ def test_a_sourced_release_mounts_its_install_root(tmp_path, layout):
     assert variables["FINN_XILINX_ROOT"] == str(root)
 
 
+def test_a_release_selected_through_a_symlink_is_mounted_at_both_paths(tmp_path):
+    root, vivado = release(tmp_path)
+    alias = tmp_path / "site-tools"
+    alias.symlink_to(root, target_is_directory=True)
+    variables, argv = dry_run(tmp_path, env={"XILINX_VIVADO": str(alias / "2025.2/Vivado")})
+    assert variables["FINN_XILINX_ROOT"] == str(root)
+    assert f"{alias}:{alias}:ro" in volumes(argv)
+
+
 def test_no_tools_and_fpga(tmp_path):
     _, vivado = release(tmp_path)
     variables, _ = dry_run(tmp_path, "--no-tools", env={"XILINX_VIVADO": str(vivado)})

@@ -3,7 +3,8 @@
 # $XILINX_VIVADO/settings64.sh at start, as a native shell would.
 #
 #   XILINX_VIVADO       the release, e.g. /tools/Xilinx/2025.2/Vivado (required)
-#   FINN_XILINX_ROOT    the install root to mount (docker/run derives it from XILINX_VIVADO)
+#   FINN_XILINX_ROOT    the install root to mount, symlinks resolved (docker/run derives it
+#                       from XILINX_VIVADO, and mounts the root as XILINX_VIVADO names it too)
 #   XILINXD_LICENSE_FILE, LM_LICENSE_FILE, PLATFORM_REPO_PATHS, FINN_TOOL_DIR_OVERRIDE: as natively
 x-tools: &tools
   # Named without a value: passed on when set, left unset otherwise.

@@ -84,9 +84,13 @@ def amd_tools(args, env):
                 "settings64.sh (or load the site's Vivado module) first."
             )
         return [], []
-    # <root>/<release>/Vivado and <root>/Vivado/<release> alike: two levels up.
-    env["FINN_XILINX_ROOT"] = str(Path(vivado).resolve().parents[1])
-    volumes = []
+    # <root>/<release>/Vivado and <root>/Vivado/<release> alike: two levels up. The
+    # container needs the tree at its canonical path, which AMD's settings scripts may
+    # name, and also as XILINX_VIVADO names it, when a symlink selects the release.
+    selected = Path(vivado).absolute().parents[1]
+    root = Path(vivado).resolve().parents[1]
+    env["FINN_XILINX_ROOT"] = str(root)
+    volumes = [] if selected == root else [f"{selected}:{selected}:ro"]
     for variable in ("XILINXD_LICENSE_FILE", "LM_LICENSE_FILE", "PLATFORM_REPO_PATHS"):
         volumes += [f"{path}:{path}:ro" for path in host_paths(variable)]
     override = os.environ.get("FINN_TOOL_DIR_OVERRIDE")
