@@ -307,9 +307,20 @@ def test_explain_extra_runs_nothing_and_shows_no_values(tmp_path):
     reason="needs docker compose",
 )
 def test_other_extra_launches_plain_docker_run_from_the_same_definition(tmp_path):
-    # The pipeline's compose.ci.yaml: the agent's caches and host name.
+    # A pipeline's COMPOSE_FILE, shaped like ci/compose.ci.yaml (which arrives with the
+    # Jenkins pipeline): the agent's caches and host name.
     caches = tmp_path / "caches"
     caches.mkdir()
+    pipeline = tmp_path / "compose.pipeline.yaml"
+    pipeline.write_text(
+        "services:\n"
+        "  finn:\n"
+        "    hostname: ${NODE_NAME:-localhost}\n"
+        "    environment:\n"
+        "      TORCH_HOME: /finn_cache/torch\n"
+        "    volumes:\n"
+        "      - ${FINN_CI_CACHES:?}:/finn_cache\n"
+    )
     root, vivado = release(tmp_path)
     extra = "--hostname dsl --network host --ulimit nofile=65536:65536 -e LIC=2100@lic"
     variables, argv = dry_run(
@@ -320,7 +331,7 @@ def test_other_extra_launches_plain_docker_run_from_the_same_definition(tmp_path
         env={
             "FINN_DOCKER_EXTRA": extra,
             "XILINX_VIVADO": str(vivado),
-            "COMPOSE_FILE": str(REPO / "ci/compose.ci.yaml"),
+            "COMPOSE_FILE": str(pipeline),
             "FINN_CI_CACHES": str(caches),
             "NODE_NAME": "agent7",
         },
