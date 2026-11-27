@@ -26,6 +26,8 @@ fi
 
 run_os=$(. /etc/os-release; echo "$VERSION_ID")
 debs=""
+part=""
+trap '[ -z "$part" ] || rm -f "$part"' EXIT
 
 # ---------------------------------------------------------------------------
 # Resolve every manifest FIRST, install nothing.
@@ -66,34 +68,37 @@ for name in $(echo "$FINN_RUNTIMES" | tr ',' ' '); do
     fetch)
         : "${DEB:?$manifest is SOURCE=fetch but does not set DEB}"
         : "${URL:?$manifest is SOURCE=fetch but does not set URL}"
-        # BuildKit's cache mount keeps verified downloads between builds.
+        # BuildKit's cache mount keeps verified downloads between builds. It is
+        # shared by concurrent builds: each downloads into its own file and
+        # publishes it, verified, by rename.
         out="/var/cache/finn-runtimes/$DEB.deb"
         if [ -n "${SHA256:-}" ] && [ -f "$out" ] && echo "$SHA256  $out" | sha256sum -c --status -; then
             echo "runtime '$name': using the verified download in the build cache"
         else
             echo "runtime '$name': fetching $DEB"
-            rm -f "$out.part"
-            if ! wget -q "$URL" -O "$out.part"; then
+            part=$(mktemp "$out.XXXXXX")
+            if ! wget -q "$URL" -O "$part"; then
                 if [ -n "${FALLBACK_URL:-}" ]; then
                     echo "  primary URL failed, trying the fallback" >&2
-                    rm -f "$out.part"
-                    wget -q "$FALLBACK_URL" -O "$out.part"
+                    wget -q "$FALLBACK_URL" -O "$part"
                 else
                     echo "ERROR: could not download $name from $URL" >&2
                     exit 1
                 fi
             fi
             if [ -n "${SHA256:-}" ]; then
-                echo "$SHA256  $out.part" | sha256sum -c -
+                echo "$SHA256  $part" | sha256sum -c -
             else
                 # Not fatal: a user pinning an unpublished build has nothing to
                 # check against. Loud, because this is an unauthenticated fetch
                 # installed as root.
                 echo "WARNING: $name downloaded with no checksum. Set SHA256 in" >&2
                 echo "         docker/runtimes/$name.env to pin it. Actual sum:" >&2
-                sha256sum "$out.part" >&2
+                sha256sum "$part" >&2
             fi
-            mv "$out.part" "$out"
+            # mktemp's 0600 would make apt fetch it unsandboxed, with a notice.
+            chmod 0644 "$part"
+            mv "$part" "$out"
         fi
         debs="$debs $out"
         ;;
