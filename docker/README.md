@@ -69,6 +69,10 @@ AMD tools follow the shell, as natively: with `XILINX_VIVADO` set (a sourced
 `settings64.sh`, a site module, a CI job), the install root is mounted and the
 container sources that release's `settings64.sh` at start, in login shells and,
 through `BASH_ENV`, in every bash, so `docker exec` sessions have the tools too.
+A job written for `run-docker.sh` may name the release with `FINN_XILINX_PATH` and
+`FINN_XILINX_VERSION` instead: the root is mounted and the container sources
+`settings64.sh` from `<path>/<version>/Vivado` or `<path>/Vivado/<version>`, and
+stops at start when neither has one.
 `--fpga` requires the tools, `--no-tools` leaves them out. Licences and platforms
 use AMD's names: `XILINXD_LICENSE_FILE` and `LM_LICENSE_FILE` (licence files among
 them are mounted read-only; `port@host` servers need nothing) and
@@ -85,6 +89,12 @@ that its `uv.lock` matches the image's; the release image has FINN installed.
 
 `-v SOURCE:TARGET[:MODE]` and `-e NAME[=VALUE]` add mounts and variables; further
 Compose files (a site's or CI's) go in `COMPOSE_FILE` and apply after FINN's.
+`FINN_DOCKER_EXTRA`, `run-docker.sh`'s extra `docker run` arguments, is still read:
+when Compose expresses every flag they become a Compose override between FINN's
+files and `COMPOSE_FILE`'s; otherwise the container starts with plain `docker run`
+from the same definition and the arguments as given
+([docker_extra.py](./docker_extra.py)). `docker/run --explain-extra` says which,
+without the values.
 
 ### Images
 
@@ -100,7 +110,8 @@ docker buildx bake release               # finn:release: FINN from its wheel
 a read-only resource cache, the entrypoint), `finn` (plus the runtimes in
 `FINN_RUNTIMES`) and `release` (plus FINN's wheel, no source tree). Building needs
 Docker Buildx with Bake (`docker buildx bake --help`; install
-`docker-buildx-plugin` if it is missing). For Apptainer or Singularity, build a
+`docker-buildx-plugin` if it is missing); CI's `finn_ci image build` falls back to
+BuildKit's `docker build` of the same target where Buildx is missing. For Apptainer or Singularity, build a
 SIF from the release image: `apptainer build finn.sif docker-daemon://finn:release`.
 
 Runtimes are independent of the AMD tools. `xrt` installs upstream's XRT 2.18.179
@@ -230,7 +241,7 @@ Vivado; the pinned Tcl declares Vivado 2025.2.
 | `run-docker.sh build_dataflow DIR` | `docker/run --fpga -v DIR:DIR -- build_dataflow DIR` |
 | `run-docker.sh notebook` | `docker/run --notebook` |
 | `scripts/finn-env.sh` | `source .venv/bin/activate` after `uv sync`, with the AMD tools from a sourced `settings64.sh` |
-| `FINN_XILINX_PATH`, `FINN_XILINX_VERSION` | `XILINX_VIVADO`, from a sourced `settings64.sh` or set to `<root>/<release>/Vivado` |
+| `FINN_XILINX_PATH`, `FINN_XILINX_VERSION` | `XILINX_VIVADO`, from a sourced `settings64.sh` or set to `<root>/<release>/Vivado`; both still read when it is unset |
 | `VIVADO_PATH`, `VITIS_PATH`, `HLS_PATH` | `XILINX_VIVADO`, `XILINX_VITIS`, `XILINX_HLS` |
 | `fetch-repos.sh`, Python clones in `deps/` | `uv.lock` and verified resources |
 | `deps/pynq_golden` | `$FINN_HOME/golden`, or `FINN_GOLDEN_DIR` |
@@ -238,5 +249,6 @@ Vivado; the pinned Tcl declares Vivado 2025.2.
 | `FINN_DOCKER_TAG`, `FINN_DOCKER_NO_CACHE` | `FINN_IMAGE`; `docker/run --build` |
 | `FINN_SKIP_XRT_DOWNLOAD`, `XRT_DEB_VERSION` | `--runtime xrt` with the pinned manifest; `SOURCE=supply` for site packages |
 | `FINN_SKIP_DEP_REPOS`, `FINN_SKIP_BOARD_FILES` | resources on first use; `FINN_RESOURCES_OFFLINE=1` with a prepared cache |
-| `FINN_DOCKER_EXTRA`, `DOCKER_INTERACTIVE`, `FINN_INST_NAME` | `-v`/`-e`, or a Compose file in `COMPOSE_FILE`; terminals are detected |
+| `FINN_DOCKER_EXTRA` | still read: a Compose override, or plain `docker run` with the arguments as given; or `-v`/`-e`, or a Compose file in `COMPOSE_FILE` |
+| `DOCKER_INTERACTIVE`, `FINN_INST_NAME` | terminals are detected |
 | `FINN_SINGULARITY` | `apptainer build finn.sif docker-daemon://finn:release` |

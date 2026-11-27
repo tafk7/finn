@@ -5,20 +5,30 @@
 
     docker/run [--fpga | --no-tools] [--runtime NAME] [--release] [--notebook]
                [--build | --no-build] [--dry-run] [-v SRC:DST] [-e VAR[=VALUE]] [-- COMMAND...]
+    docker/run --explain-extra
 
 The container is compose.yaml's: this checkout and the working directory, FINN_HOME
 and the build directory are mounted at their host paths, and the container runs as
 the caller. AMD tools follow the shell, as natively: with XILINX_VIVADO set (a
 sourced settings64.sh, a site module, or a CI job's environment), compose.tools.yaml
 mounts the install root read-only and the container sources that release's
-settings64.sh. --fpga requires the tools; --no-tools leaves them out.
+settings64.sh. Without it, a job's FINN_XILINX_PATH and FINN_XILINX_VERSION
+(run-docker.sh's variables) do the same: the container finds the release under the
+install root. --fpga requires the tools; --no-tools leaves them out.
 
 The image is built with `docker buildx bake` when it is missing (--build rebuilds
 it): finn:dev, finn:dev-<runtime> with --runtime (xrt, slash), finn:release with
 --release (FINN from its wheel). COMPOSE_FILE adds further Compose files.
+
+FINN_DOCKER_EXTRA, extra `docker run` arguments, becomes a Compose override when
+Compose expresses every one; otherwise the container starts with plain `docker run`
+and the arguments as given (docker/docker_extra.py). --explain-extra says which,
+without the values.
 """
 import argparse
+import docker_extra
 import importlib.util
+import json
 import os
 import shlex
 import shutil
@@ -64,6 +74,11 @@ def parse_args(argv):
     build.add_argument("--build", action="store_true", help="rebuild the image first")
     build.add_argument("--no-build", action="store_true", help="never build the image")
     parser.add_argument("--dry-run", action="store_true", help="print the command, run nothing")
+    parser.add_argument(
+        "--explain-extra",
+        action="store_true",
+        help="say how FINN_DOCKER_EXTRA is applied, without its values; run nothing",
+    )
     parser.add_argument("-v", "--volume", action="append", default=[], help="an extra mount")
     parser.add_argument("-e", "--env", action="append", default=[], help="an extra variable")
     parser.add_argument("command", nargs=argparse.REMAINDER)
@@ -77,18 +92,24 @@ def parse_args(argv):
 def amd_tools(args, env):
     """The Compose files and mounts that bring the shell's AMD tools in, if any."""
     vivado = None if args.no_tools else os.environ.get("XILINX_VIVADO")
-    if not vivado:
+    install = None if args.no_tools else job_install_root()
+    if not vivado and not install:
         if args.fpga:
             fail(
                 "--fpga needs the AMD tools, but XILINX_VIVADO is not set. Source a release's "
                 "settings64.sh (or load the site's Vivado module) first."
             )
         return [], []
-    # <root>/<release>/Vivado and <root>/Vivado/<release> alike: two levels up. The
-    # container needs the tree at its canonical path, which AMD's settings scripts may
-    # name, and also as XILINX_VIVADO names it, when a symlink selects the release.
-    selected = Path(vivado).absolute().parents[1]
-    root = Path(vivado).resolve().parents[1]
+    if vivado:
+        # <root>/<release>/Vivado and <root>/Vivado/<release> alike: two levels up.
+        selected = Path(vivado).absolute().parents[1]
+        root = Path(vivado).resolve().parents[1]
+    else:
+        # docker/profile.sh finds the release under it, in either layout.
+        selected = install.absolute()
+        root = install.resolve()
+    # The container needs the tree at its canonical path, which AMD's settings scripts
+    # may name, and also as the variable names it, when a symlink selects the release.
     env["FINN_XILINX_ROOT"] = str(root)
     volumes = [] if selected == root else [f"{selected}:{selected}:ro"]
     for variable in ("XILINXD_LICENSE_FILE", "LM_LICENSE_FILE", "PLATFORM_REPO_PATHS"):
@@ -99,8 +120,55 @@ def amd_tools(args, env):
     return [REPO / "compose.tools.yaml"], volumes
 
 
+def job_install_root():
+    """The install root a job names with FINN_XILINX_PATH and FINN_XILINX_VERSION, if
+    both are set."""
+    path, version = (os.environ.get(v) for v in ("FINN_XILINX_PATH", "FINN_XILINX_VERSION"))
+    if not (path and version):
+        return None
+    if not Path(path).is_dir():
+        fail(f"FINN_XILINX_PATH={path} is not a directory")
+    return Path(path)
+
+
+def docker_extra_tokens():
+    """FINN_DOCKER_EXTRA's arguments, and their Compose service keys (None when Compose
+    cannot express them all)."""
+    value = os.environ.get(docker_extra.VARIABLE, "")
+    if not value.strip():
+        return [], None
+    try:
+        tokens = docker_extra.split(value)
+    except docker_extra.ExtraError as error:
+        fail(str(error))
+    return tokens, docker_extra.translate(tokens)[0]
+
+
+def render(files, env, service):
+    """The service as Compose resolves it from these files."""
+    if not shutil.which("docker"):
+        fail("docker is not installed")
+    rendered = subprocess.run(
+        ["docker", "compose", "--project-directory", str(REPO), "--profile", "notebook"]
+        + ["config", "--format", "json"],
+        env={**os.environ, **env, "COMPOSE_FILE": os.pathsep.join(map(str, files))},
+        capture_output=True,
+        text=True,
+    )
+    if rendered.returncode:
+        fail(f"docker compose config failed: {rendered.stderr.strip()}")
+    return json.loads(rendered.stdout)["services"][service]
+
+
 def main(argv=None):
     args, command = parse_args(argv)
+    if args.explain_extra:
+        try:
+            print(docker_extra.explain(os.environ.get(docker_extra.VARIABLE, "")))
+        except docker_extra.ExtraError as error:
+            fail(str(error))
+        return
+    extra, extra_service = docker_extra_tokens()
     runtimes = sorted({r for value in args.runtime for r in value.split(",") if r})
     suffix = "".join("-" + r for r in runtimes)
     image = (
@@ -130,8 +198,10 @@ def main(argv=None):
 
     tool_files, tool_volumes = amd_tools(args, env)
     volumes += tool_volumes
-    files = [REPO / "compose.yaml", *tool_files]
-    files += [f for f in os.environ.get("COMPOSE_FILE", "").split(os.pathsep) if f]
+    own = [REPO / "compose.yaml", *tool_files]
+    if extra_service:
+        own.append(docker_extra.write_override(extra_service, env["FINN_BUILD_DIR"]))
+    files = own + [f for f in os.environ.get("COMPOSE_FILE", "").split(os.pathsep) if f]
     env["COMPOSE_FILE"] = os.pathsep.join(map(str, files))
 
     service = "notebook" if args.notebook else "finn"
@@ -148,6 +218,21 @@ def main(argv=None):
     for variable in args.env:
         argv += ["--env", variable]
     argv += [service, *command]
+    if extra and extra_service is None:
+        # FINN_DOCKER_EXTRA has flags Compose cannot express: plain docker run, from
+        # the same definition.
+        try:
+            argv = docker_extra.docker_run(
+                render(own, env, service),
+                render(files, env, service),
+                extra,
+                volumes,
+                args.env,
+                command,
+                sys.stdin.isatty(),
+            )
+        except docker_extra.ExtraError as error:
+            fail(str(error))
 
     bake = ["docker", "buildx", "bake", "--load", "release" if args.release else "finn"]
     bake_env = {"FINN_RUNTIMES": ",".join(runtimes)}

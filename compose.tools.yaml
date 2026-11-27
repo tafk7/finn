@@ -2,14 +2,20 @@
 # read-only at its own path, and AMD's own variables. The container sources
 # $XILINX_VIVADO/settings64.sh at start, as a native shell would.
 #
-#   XILINX_VIVADO       the release, e.g. /tools/Xilinx/2025.2/Vivado (required)
+#   XILINX_VIVADO       the release, e.g. /tools/Xilinx/2025.2/Vivado
+#   FINN_XILINX_PATH, FINN_XILINX_VERSION
+#                       a job's install root and release (run-docker.sh's variables), in
+#                       place of XILINX_VIVADO: the container finds the release under it
 #   FINN_XILINX_ROOT    the install root to mount, symlinks resolved (docker/run derives it
-#                       from XILINX_VIVADO, and mounts the root as XILINX_VIVADO names it too)
+#                       from XILINX_VIVADO or FINN_XILINX_PATH, and mounts the root as the
+#                       variable names it too)
 #   XILINXD_LICENSE_FILE, LM_LICENSE_FILE, PLATFORM_REPO_PATHS, FINN_TOOL_DIR_OVERRIDE: as natively
 x-tools: &tools
   # Named without a value: passed on when set, left unset otherwise.
   environment:
     - XILINX_VIVADO
+    - FINN_XILINX_PATH
+    - FINN_XILINX_VERSION
     - XILINXD_LICENSE_FILE
     - LM_LICENSE_FILE
     - PLATFORM_REPO_PATHS

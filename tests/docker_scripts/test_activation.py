@@ -81,6 +81,45 @@ def test_the_container_without_tools_sets_no_amd_variables(tmp_path):
     assert home == f"/tmp/finn-home-{os.getuid()}/.finn"
 
 
+@pytest.mark.parametrize("layout", ["2024.2/Vivado", "Vivado/2024.2"])
+def test_a_jobs_install_root_and_release_select_the_release(tmp_path, layout):
+    vivado = tmp_path / "Xilinx" / layout
+    vivado.mkdir(parents=True)
+    (vivado / "settings64.sh").write_text(f'export PATH="{vivado}/bin:$PATH"\n')
+    job = {"FINN_XILINX_PATH": str(tmp_path / "Xilinx"), "FINN_XILINX_VERSION": "2024.2"}
+    out = profile(tmp_path, 'echo "$XILINX_VIVADO|$PATH|${finn_vivado-unset}"', **job)
+    selected, path, scratch = out.strip().split("|")
+    assert selected == str(vivado) and path.startswith(f"{vivado}/bin:")
+    assert scratch == "unset"
+    # XILINX_VIVADO, when the launcher passes it, wins.
+    other = tmp_path / "other/Vivado"
+    other.mkdir(parents=True)
+    (other / "settings64.sh").write_text("")
+    out = profile(tmp_path, 'echo "$XILINX_VIVADO"', XILINX_VIVADO=str(other), **job)
+    assert out.strip() == str(other)
+
+
+def test_a_jobs_missing_release_stops_the_container_start(tmp_path):
+    (tmp_path / "Xilinx/2025.2/Vivado").mkdir(parents=True)  # no settings64.sh
+    entrypoint = tmp_path / "entrypoint"
+    entrypoint.write_text(f"set -eo pipefail\n. {PROFILE_SH}\necho started\n")
+    # As in the image: BASH_ENV sources the profile before the entrypoint does.
+    proc = subprocess.run(
+        ["/bin/bash", str(entrypoint)],
+        capture_output=True,
+        text=True,
+        env={
+            "PATH": "/usr/bin:/bin",
+            "HOME": str(tmp_path / "home"),
+            "BASH_ENV": PROFILE_SH,
+            "FINN_XILINX_PATH": str(tmp_path / "Xilinx"),
+            "FINN_XILINX_VERSION": "2024.2",
+        },
+    )
+    assert proc.returncode == 1 and "started" not in proc.stdout
+    assert "no settings64.sh for FINN_XILINX_VERSION=2024.2" in proc.stderr
+
+
 # --------------------------------------------------------------------------
 # Native use: uv sync and the venv, nothing of FINN's own.
 # --------------------------------------------------------------------------

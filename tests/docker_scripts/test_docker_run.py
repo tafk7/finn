@@ -194,7 +194,7 @@ def worktree(tmp_path, common):
     """A worktree of a repository at `common` holding docker/run: its launcher, and the
     git directories it must mount."""
     git = ["git", "-c", "user.name=test", "-c", "user.email=test@localhost"]
-    for source in (RUN, REPO / "src/finn/util/paths.py"):
+    for source in (RUN, RUN.parent / "docker_extra.py", REPO / "src/finn/util/paths.py"):
         target = common / source.relative_to(REPO)
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(source, target)
@@ -219,3 +219,121 @@ def test_a_host_without_git_mounts_no_git_directories(tmp_path):
     (tmp_path / "bin").mkdir()
     _, argv = dry_run(tmp_path, run=run, env={"PATH": str(tmp_path / "bin")})
     assert not [v for v in volumes(argv) if "/.git" in v]
+
+
+# --------------------------------------------------------------------------
+# A job's run-docker.sh variables: FINN_XILINX_PATH/VERSION and FINN_DOCKER_EXTRA.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("layout", ["new", "old"])
+def test_a_jobs_install_root_and_release_bring_the_tools_in(tmp_path, layout):
+    root, _ = release(tmp_path, layout)
+    job = {"FINN_XILINX_PATH": str(root), "FINN_XILINX_VERSION": "2025.2"}
+    variables, argv = dry_run(tmp_path, "--fpga", env=job)
+    assert files(variables) == ["compose.yaml", "compose.tools.yaml"]
+    assert variables["FINN_XILINX_ROOT"] == str(root)
+    # A symlinked root is mounted as the job names it, too.
+    alias = tmp_path / "site-tools"
+    alias.symlink_to(root, target_is_directory=True)
+    variables, argv = dry_run(tmp_path, env={**job, "FINN_XILINX_PATH": str(alias)})
+    assert variables["FINN_XILINX_ROOT"] == str(root)
+    assert f"{alias}:{alias}:ro" in volumes(argv)
+
+
+def test_xilinx_vivado_wins_and_a_missing_install_root_stops(tmp_path):
+    root, vivado = release(tmp_path)
+    other = tmp_path / "other"
+    other.mkdir()
+    variables, _ = dry_run(
+        tmp_path,
+        env={
+            "XILINX_VIVADO": str(vivado),
+            "FINN_XILINX_PATH": str(other),
+            "FINN_XILINX_VERSION": "x",
+        },
+    )
+    assert variables["FINN_XILINX_ROOT"] == str(root)
+    error = dry_run(
+        tmp_path, env={"FINN_XILINX_PATH": str(tmp_path / "none"), "FINN_XILINX_VERSION": "2025.2"}
+    )
+    assert "FINN_XILINX_PATH=" in error and "is not a directory" in error
+    # Only the path, or only the release, is not enough.
+    error = dry_run(tmp_path, "--fpga", env={"FINN_XILINX_PATH": str(root)})
+    assert "--fpga needs the AMD tools" in error
+
+
+def test_compose_compatible_extra_becomes_an_override_before_compose_file(tmp_path):
+    shim = tmp_path / "shim"
+    extra = f"-v {shim}:{shim} -e FINN_TOOL_DIR_OVERRIDE={shim} -e LM_LICENSE_FILE=2100@lic"
+    extra += " --network host"
+    variables, argv = dry_run(
+        tmp_path, env={"FINN_DOCKER_EXTRA": extra, "COMPOSE_FILE": "site.yaml"}
+    )
+    names = files(variables)
+    assert names[0] == "compose.yaml" and names[-1] == "site.yaml"
+    assert names[1].startswith(".finn-docker-extra-") and len(names) == 3
+    override = Path(variables["COMPOSE_FILE"].split(os.pathsep)[1])
+    assert override.parent == tmp_path / "build"
+    assert json.loads(override.read_text())["services"]["finn"] == {
+        "environment": [f"FINN_TOOL_DIR_OVERRIDE={shim}", "LM_LICENSE_FILE=2100@lic"],
+        "network_mode": "host",
+        "volumes": [f"{shim}:{shim}"],
+    }
+    assert argv[:2] == ["docker", "compose"]
+
+
+def test_explain_extra_runs_nothing_and_shows_no_values(tmp_path):
+    def explain(value):
+        result = subprocess.run(
+            [sys.executable, RUN, "--explain-extra"],
+            env={"PATH": os.environ["PATH"], "FINN_DOCKER_EXTRA": value},
+            capture_output=True,
+            text=True,
+        )
+        return result.returncode, result.stdout + result.stderr
+
+    code, out = explain("-e LIC=2100@secret --network host")
+    assert code == 0 and "Compose override" in out and "secret" not in out
+    code, out = explain("-e LIC=2100@secret --gpus all")
+    assert code == 0 and "plain `docker run`" in out and "--gpus" in out and "secret" not in out
+    code, out = explain("-e 'LIC=2100@secret")
+    assert code == 1 and "does not split as shell words" in out and "secret" not in out
+
+
+@pytest.mark.skipif(
+    not shutil.which("docker")
+    or subprocess.run(["docker", "compose", "version"], capture_output=True).returncode,
+    reason="needs docker compose",
+)
+def test_other_extra_launches_plain_docker_run_from_the_same_definition(tmp_path):
+    # The pipeline's compose.ci.yaml: the agent's caches and host name.
+    caches = tmp_path / "caches"
+    caches.mkdir()
+    root, vivado = release(tmp_path)
+    extra = "--hostname dsl --network host --ulimit nofile=65536:65536 -e LIC=2100@lic"
+    variables, argv = dry_run(
+        tmp_path,
+        "--fpga",
+        "--",
+        "pytest",
+        env={
+            "FINN_DOCKER_EXTRA": extra,
+            "XILINX_VIVADO": str(vivado),
+            "COMPOSE_FILE": str(REPO / "ci/compose.ci.yaml"),
+            "FINN_CI_CACHES": str(caches),
+            "NODE_NAME": "agent7",
+        },
+    )
+    assert not any(Path(f).name.startswith(".finn-docker-extra-") for f in files(variables))
+    assert argv[:2] == ["docker", "run"] and argv[-2:] == ["finn:dev", "pytest"]
+    at = argv.index("--ulimit") - 4
+    assert argv[at : at + 8] == shlex.split(extra)
+    own, after = argv[:at], argv[at + 8 :]
+    assert f"{REPO}:{REPO}" in own and f"{root}:{root}:ro" in own
+    assert "--network" not in own  # the DSL's network replaces docker/run's
+    assert own[own.index("--user") + 1] == f"{os.getuid()}:{os.getgid()}"
+    assert f"XILINX_VIVADO={vivado}" in own
+    # The pipeline's host name and caches come after the DSL's flags, as upstream's did.
+    assert after[after.index("--hostname") + 1] == "agent7"
+    assert f"{caches}:/finn_cache" in after and "TORCH_HOME=/finn_cache/torch" in after
