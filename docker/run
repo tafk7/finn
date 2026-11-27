@@ -84,6 +84,9 @@ def main(argv=None):
     volumes = list(args.volume)
     if not Path(os.getcwd()).resolve().is_relative_to(REPO):
         volumes.append(f"{os.getcwd()}:{os.getcwd()}")
+    # A worktree's git directory lies outside the checkout: mount it, so that git and the
+    # version from git (setuptools-scm) work in the container too.
+    volumes += [f"{path}:{path}" for path in git_dirs_outside(REPO)]
     if (REPO / "ssh_keys").is_dir():
         volumes.append(f"{REPO / 'ssh_keys'}:/run/finn/ssh:ro")
 
@@ -135,6 +138,20 @@ def main(argv=None):
     if not shutil.which("docker"):
         fail("docker is not installed")
     os.execvpe("docker", argv, {**os.environ, **env})
+
+
+def git_dirs_outside(repo):
+    """The checkout's git directories that lie outside it (a worktree's), if git is at hand."""
+    found = subprocess.run(
+        ["git", "rev-parse", "--absolute-git-dir", "--git-common-dir"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+    )
+    if found.returncode != 0:
+        return []
+    paths = {(repo / line).resolve() for line in found.stdout.split()}
+    return sorted(str(p) for p in paths if not p.is_relative_to(repo.resolve()))
 
 
 def finn_version():

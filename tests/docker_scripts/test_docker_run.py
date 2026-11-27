@@ -103,7 +103,9 @@ def test_licence_files_and_platforms_are_mounted_servers_are_not(tmp_path):
         "PLATFORM_REPO_PATHS": str(platforms),
     }
     _, argv = dry_run(tmp_path, env=env)
-    assert volumes(argv) == [f"{licence}:{licence}:ro", f"{platforms}:{platforms}:ro"]
+    # a worktree checkout also mounts its git directories
+    mounted = [v for v in volumes(argv) if "/.git" not in v]
+    assert mounted == [f"{licence}:{licence}:ro", f"{platforms}:{platforms}:ro"]
 
 
 def test_a_workspace_outside_the_checkout_is_mounted(tmp_path):
@@ -163,3 +165,17 @@ def test_compose_renders_mirrored_paths_and_read_only_tools(tmp_path):
     assert finn["environment"].get("PLATFORM_REPO_PATHS") is None
     assert finn["user"] == f"{os.getuid()}:{os.getgid()}"
     assert finn["working_dir"] == str(REPO)
+
+
+def test_a_worktrees_git_directories_are_mounted(tmp_path):
+    common = subprocess.run(
+        ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+    )
+    if common.returncode != 0 or Path(common.stdout.strip()).is_relative_to(REPO.resolve()):
+        pytest.skip("not a worktree checkout")
+    _, argv = dry_run(tmp_path)
+    git_dir = common.stdout.strip()
+    assert f"{git_dir}:{git_dir}" in volumes(argv)
