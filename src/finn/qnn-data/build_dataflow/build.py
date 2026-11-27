@@ -28,9 +28,8 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 # This file is intended to serve as an example showing how to set up custom builds
-# using FINN. The custom build can be launched like this:
-# ./docker/run --fpga --volume /path/to/folder:/path/to/folder \
-#   --workdir /path/to/folder -- python build.py
+# using FINN. The custom build can be launched from its folder like this:
+# cd /path/to/folder && /path/to/finn/docker/run --fpga -- python build.py
 
 
 import finn.builder.build_dataflow as build

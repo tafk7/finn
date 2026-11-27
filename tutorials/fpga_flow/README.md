@@ -35,10 +35,10 @@ source /opt/Xilinx/2025.2/Vivado/settings64.sh
 export FINN_ROOT=/home/foo/finn
 ```
 
-Then, change to `finn` install directory and invoke the build as follows:
+Then, change to the tutorial's directory and invoke the build as follows:
 ```shell
-cd ${FINN_ROOT}
-./docker/run --fpga --workdir "${FINN_ROOT}/tutorials/fpga_flow" -- python build.py
+cd ${FINN_ROOT}/tutorials/fpga_flow
+${FINN_ROOT}/docker/run --fpga -- python build.py
 ```
 
 Alternatively, since the tutorials folder is already part of the FINN compiler installation, you can invoke it from within the Docker container:

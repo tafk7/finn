@@ -264,14 +264,15 @@ calling the steps from the simple dataflow build mode above,
 making calls to FINN library functions, preprocessing and altering models, building several variants etc.
 You can find a basic example of a build flow under ``src/finn/qnn-data/build_dataflow/build.py``.
 
-You can launch the desired custom build flow using:
+You can launch the desired custom build flow from that folder using:
 
 ::
 
- ./docker/run --fpga --volume /path/to/model:/path/to/model --workdir /path/to/model -- python <name-of-build-flow>.py
+ cd /path/to/custom_build_dir
+ /path/to/finn/docker/run --fpga -- python <name-of-build-flow>.py
 
-This mounts the specified folder into the FINN Docker container and executes
-the explicitly named Python file. For example, use ``python build.py`` to run
-``build.py`` in that directory.
+``docker/run`` mounts the working directory into the FINN Docker container at
+its own path and runs the command there. For example, use ``python build.py`` to
+run ``build.py`` in that directory.
 
 If you would like to learn more about advance builder settings, please have a look at `our tutorial about this topic <https://github.com/Xilinx/finn/blob/main/notebooks/advanced/4_advanced_builder_settings.ipynb>`_.
