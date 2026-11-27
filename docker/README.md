@@ -209,8 +209,12 @@ operators reach any other resource with `finn.resources.path(NAME)` or
 `finn.resources.join(NAME, ...)`.
 
 The board repositories are assembled into the upstream flat layout in the
-resource cache. Locally built images contain the board sources, which may not
-be redistributed; the release target omits them.
+resource cache. No image contains the board sources, which may not be
+redistributed; of the fetched resources, images hold only finn-hlslib. A board
+build fetches them into `FINN_HOME`, which the container mounts from the host.
+For offline board builds, fetch them while online
+(`docker/run -- finn resources fetch --all`), or prepare a directory with
+`--dest` and select it with `FINN_RESOURCES_DIR`, as above.
 
 XSim binding builds are keyed by their sources, Python ABI, compiler, compile and link
 settings, pybind11 version and Vivado installation. `finn resources golden` builds
