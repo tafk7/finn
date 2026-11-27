@@ -32,7 +32,7 @@ import os
 from finn import resources
 from finn.custom_op.fpgadataflow.rtlbackend import RTLBackend
 from finn.custom_op.fpgadataflow.vectorvectoractivation import VVAU
-from finn.util.basic import DSP_VERSIONS, is_versal, resolve_dsp_block
+from finn.util.basic import DSP_VERSIONS, is_versal, resolve_dsp_block, tcl_string
 from finn.util.data_packing import npy_to_rtlsim_input, rtlsim_output_to_npy
 
 
@@ -154,7 +154,7 @@ class VVAU_rtl(VVAU, RTLBackend):
         ] + [rtllib_dir + _ for _ in sourcefiles]
 
         for f in sourcefiles:
-            cmd.append("add_files -norecurse %s" % (f))
+            cmd.append("add_files -norecurse %s" % tcl_string(f))
 
         mem_mode = self.get_nodeattr("mem_mode")
         if mem_mode == "internal_decoupled":

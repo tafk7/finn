@@ -32,7 +32,12 @@ import os
 from finn import resources
 from finn.custom_op.fpgadataflow.matrixvectoractivation import MVAU
 from finn.custom_op.fpgadataflow.rtlbackend import RTLBackend
-from finn.util.basic import DSP_VERSIONS, get_dsp_datapath_limits, resolve_dsp_block
+from finn.util.basic import (
+    DSP_VERSIONS,
+    get_dsp_datapath_limits,
+    resolve_dsp_block,
+    tcl_string,
+)
 from finn.util.data_packing import npy_to_rtlsim_input, rtlsim_output_to_npy
 
 # ONNX i/o tensor shape assumptions for MatrixVectorActivation_rtl:
@@ -213,7 +218,7 @@ class MVAU_rtl(MVAU, RTLBackend):
         ] + [rtllib_dir + _ for _ in sourcefiles]
 
         for f in sourcefiles:
-            cmd.append("add_files -norecurse %s" % (f))
+            cmd.append("add_files -norecurse %s" % tcl_string(f))
         if self.get_nodeattr("mem_mode") in [
             "internal_decoupled",
             "dynamic",

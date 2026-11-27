@@ -12,7 +12,7 @@ import subprocess
 import threading
 from pathlib import Path
 
-from finn import xsi
+from finn import resources, xsi
 from finn.resources import _cli, _store, prepare
 from finn.util.basic import get_pynq_golden_dir, make_build_dir, tcl_string
 from finn.util.paths import home, scratch
@@ -130,6 +130,69 @@ def test_hls_include_paths_reach_the_compiler_whole(state, tmp_path, monkeypatch
     assert result.returncode == 0, result.stderr
     # Split as a GNU command line is: quotes group an argument, backslashes escape.
     assert shlex.split(result.stdout) == ["-std=c++14", *("-I" + str(i) for i in includes)]
+
+
+@pytest.mark.skipif(not shutil.which("tclsh"), reason="tclsh is not installed")
+def test_rtl_resources_reach_ipi_tcl_as_one_file_each(state, tmp_path, monkeypatch):
+    from onnx import helper  # noqa: PLC0415
+    from qonnx.custom_op.registry import getCustomOp  # noqa: PLC0415
+
+    rtllib = tmp_path / 'rtl lib $HOME [x] "q"'
+    shutil.copytree(resources.path("rtllib"), rtllib)
+    monkeypatch.setenv("FINN_RESOURCES_RTLLIB", str(rtllib))
+    generated = tmp_path / "generated"
+    generated.mkdir()
+    for name in ("mvau_memstream_wrapper.v", "fifo.v"):
+        (generated / name).write_text("")
+    common = dict(backend="fpgadataflow", code_gen_dir_ipgen=str(generated))
+    nodes = [
+        helper.make_node(
+            "MVAU_hls",
+            ["in", "weights"],
+            ["out"],
+            "mvau",
+            domain="finn.custom_op.fpgadataflow.hls",
+            MW=4,
+            MH=4,
+            SIMD=2,
+            PE=2,
+            inputDataType="INT2",
+            weightDataType="INT2",
+            outputDataType="INT32",
+            noActivation=1,
+            mem_mode="internal_decoupled",
+            **common,
+        ),
+        helper.make_node(
+            "StreamingFIFO_rtl",
+            ["in"],
+            ["out"],
+            "fifo",
+            domain="finn.custom_op.fpgadataflow.rtl",
+            depth=32,
+            folded_shape=[1, 4],
+            dataType="INT2",
+            gen_top_module="fifo",
+            **common,
+        ),
+    ]
+    commands = [c for n in nodes for c in getCustomOp(n).code_generation_ipi() if "add_files" in c]
+    stub = "proc add_files {args} {puts [llength $args]; puts [lindex $args end]}\n"
+    result = subprocess.run(
+        ["tclsh"], input=stub + "\n".join(commands), capture_output=True, text=True, cwd=tmp_path
+    )
+    assert result.returncode == 0, result.stderr
+    lines = result.stdout.splitlines()
+    assert lines[::2] == ["2"] * len(commands)  # -norecurse and one file
+    files = [Path(f) for f in lines[1::2]]
+    assert all(f.is_file() for f in files)
+    assert [f.name for f in files if f.is_relative_to(rtllib)] == [
+        "axilite.sv",
+        "memstream_axi.sv",
+        "memstream.sv",
+        "fifo_gauge.sv",
+        "fifo.sv",
+    ]
 
 
 def test_xsi_key_changes_with_flags_and_pybind_version(state, monkeypatch):

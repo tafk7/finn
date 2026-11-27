@@ -37,7 +37,7 @@ from finn import resources
 from finn.custom_op.fpgadataflow.hlsbackend import HLSBackend
 from finn.custom_op.fpgadataflow.thresholding import Thresholding
 from finn.util import releases
-from finn.util.basic import get_vivado_version, is_versal
+from finn.util.basic import get_vivado_version, is_versal, tcl_string
 from finn.util.data_packing import (
     hls_datatype_str,
     npy_to_rtlsim_input,
@@ -645,7 +645,7 @@ class Thresholding_hls(Thresholding, HLSBackend):
                 ms_rtllib_dir + "memstream.sv",
             ]
             for f in sourcefiles:
-                cmd += ["add_files -norecurse %s" % f]
+                cmd += ["add_files -norecurse %s" % tcl_string(f)]
             strm_inst = node_name + "_wstrm"
             cmd.append(
                 "create_bd_cell -type hier -reference %s /%s/%s"

@@ -35,7 +35,7 @@ from qonnx.util.basic import roundup_to_integer_multiple
 from finn import resources
 from finn.custom_op.fpgadataflow.rtlbackend import RTLBackend
 from finn.custom_op.fpgadataflow.thresholding import Thresholding
-from finn.util.basic import get_memutil_alternatives, mem_primitives_versal
+from finn.util.basic import get_memutil_alternatives, mem_primitives_versal, tcl_string
 from finn.util.data_packing import (
     npy_to_rtlsim_input,
     pack_innermost_dim_as_hex_string,
@@ -414,7 +414,7 @@ class Thresholding_rtl(Thresholding, RTLBackend):
         block."""
         cmd = []
         for rtl_file in self.get_rtl_file_list(abspath=True):
-            cmd.append("add_files -norecurse %s" % rtl_file)
+            cmd.append("add_files -norecurse %s" % tcl_string(rtl_file))
 
         # Create an RTL block, not an IP core (-type ip)
         cmd.append(

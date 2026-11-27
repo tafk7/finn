@@ -14,7 +14,12 @@ from finn import resources
 from finn.custom_op.fpgadataflow import elementwise_binary
 from finn.custom_op.fpgadataflow.elementwise_binary import ElementwiseBinaryOperation
 from finn.custom_op.fpgadataflow.rtlbackend import RTLBackend
-from finn.util.basic import arith_rtl_files, fifo_rtl_files, roundup_to_integer_multiple
+from finn.util.basic import (
+    arith_rtl_files,
+    fifo_rtl_files,
+    roundup_to_integer_multiple,
+    tcl_string,
+)
 from finn.util.data_packing import (
     npy_to_rtlsim_input,
     pack_innermost_dim_as_hex_string,
@@ -295,7 +300,7 @@ class ElementwiseBinary_rtl(ElementwiseBinaryOperation, RTLBackend):
                 ms_rtllib_dir + "memstream.sv",
             ]
             for f in sourcefiles:
-                cmd.append("add_files -norecurse %s" % f)
+                cmd.append("add_files -norecurse %s" % tcl_string(f))
             strm_inst = node_name + "_wstrm"
             cmd.append(
                 "create_bd_cell -type hier -reference %s /%s/%s"
@@ -344,7 +349,7 @@ class ElementwiseBinary_rtl(ElementwiseBinaryOperation, RTLBackend):
         top_module = self.get_nodeattr("gen_top_module")
 
         for f in self.get_rtl_file_list(abspath=True):
-            cmd.append("add_files -norecurse %s" % f)
+            cmd.append("add_files -norecurse %s" % tcl_string(f))
 
         # Always create the core inside the hierarchical wrapper
         cmd.append(

@@ -33,6 +33,7 @@ from finn.custom_op.fpgadataflow.rtlbackend import RTLBackend
 from finn.custom_op.fpgadataflow.streamingdatawidthconverter import (
     StreamingDataWidthConverter,
 )
+from finn.util.basic import tcl_string
 
 
 class StreamingDataWidthConverter_rtl(StreamingDataWidthConverter, RTLBackend):
@@ -110,7 +111,7 @@ class StreamingDataWidthConverter_rtl(StreamingDataWidthConverter, RTLBackend):
         """Constructs and returns the TCL for node instantiation in Vivado IPI."""
         cmd = []
         for f in self.get_rtl_file_list(abspath=True):
-            cmd.append("add_files -norecurse %s" % f)
+            cmd.append("add_files -norecurse %s" % tcl_string(f))
         cmd.append(
             "create_bd_cell -type module -reference %s %s"
             % (self.get_nodeattr("gen_top_module"), self.onnx_node.name)

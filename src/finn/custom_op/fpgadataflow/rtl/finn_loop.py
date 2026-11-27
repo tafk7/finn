@@ -909,7 +909,7 @@ class FINNLoop(HWCustomOp, RTLBackend):
             dwc_rtllib_dir + "vpc.sv",
         ]
         for f in sourcefiles:
-            cmd += ["add_files -norecurse %s" % f]
+            cmd += ["add_files -norecurse %s" % tcl_string(f)]
 
         adj_list = adjacency_list(
             loop_body,
