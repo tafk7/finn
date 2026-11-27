@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Compiler tests use the full upstream runtime profile (FINN_RUNTIMES, default xrt)
+# Compiler tests use the full runtime profile (FINN_RUNTIMES, default xrt)
 # and require the AMD tools. A prepared image in FINN_IMAGE (from `finn_ci image
 # build` or `load`) is run as it is. Host-side finn_ci and board-side PYNQ/XRT
 # environments remain separate.

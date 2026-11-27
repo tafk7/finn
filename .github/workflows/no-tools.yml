@@ -85,7 +85,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      # No lock: pip resolves pyproject.toml's ranges as a user's pip does today.
+      # No lock: pip resolves pyproject.toml's ranges as a user's pip does.
       - name: FINN with pip
         run: |
           python -m venv ../pip-env

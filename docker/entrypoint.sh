@@ -22,7 +22,7 @@ if [ -n "${FINN_ROOT:-}" ] && [ -z "${FINN_RELEASE:-}" ]; then
         exit 1
     }
     uv pip install --quiet --no-deps --no-build-isolation -e "$FINN_ROOT"
-    # Upstream's opt-in Vivado initialization scripts, in the caller's HOME.
+    # The checkout's opt-in Vivado initialization scripts (.Xilinx), in the caller's HOME.
     if [ -d "$FINN_ROOT/.Xilinx" ]; then
         mkdir -p "$HOME/.Xilinx" && cp -a "$FINN_ROOT/.Xilinx/." "$HOME/.Xilinx/"
     fi

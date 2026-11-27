@@ -130,7 +130,7 @@ def test_finn_declares_its_trees_hlslib_and_board_files(project):
     own = {r.name for r in declared.values() if r.package}
     assert own == {"rtllib", "finn-xsi", "qnn-data", "custom-hls"}
     assert declared["hlslib"].kind == ("hls-include",) and declared["hlslib"].redistributable
-    # FINN's own include directory follows finn-hlslib, as the include order did.
+    # FINN's own HLS headers come after finn-hlslib's on the include path.
     hls = [r.name for r in declared.values() if "hls-include" in r.kind]
     assert hls == ["hlslib", "custom-hls"]
     boards = [r for r in declared.values() if "vivado-boards" in r.kind]

@@ -19,7 +19,7 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
 ]
 dependencies = [
-    # Lower bounds are the versions upstream dev tests (requirements.txt, the image).
+    # Lower bounds are tested: .github/workflows/dependencies.yml runs at them weekly.
     "bitstring>=4.2.3",
     "clize>=5.0.1",
     "dataclasses-json>=0.5.7",
