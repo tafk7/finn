@@ -90,7 +90,7 @@ jobs:
         run: |
           python -m venv ../pip-env
           ../pip-env/bin/pip install --upgrade pip
-          ../pip-env/bin/pip install ".[brevitas]" "pytest>=9" "pytest-xdist>=3.8"
+          ../pip-env/bin/pip install ".[brevitas]" "pytest>=9,<9.2" "pytest-xdist>=3.8"  # the test group's bounds (pyproject.toml)
           ../pip-env/bin/pip list
           echo "$GITHUB_WORKSPACE/../pip-env/bin" >> "$GITHUB_PATH"
 

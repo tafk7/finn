@@ -80,7 +80,12 @@ test = [
     "finn[brevitas]",
     "setuptools>=77",  # test_wheel builds FINN with it
     "setuptools-scm>=8",  # and the builds without isolation (the container's)
-    "pytest>=9",
+    # pytest 9.2 stores a test's node id where pytest-xdist 3.8 no longer reaches it, so
+    # --dist loadgroup stops grouping: xdist_group chains (end2end, notebooks, benchmarks)
+    # are split across workers and their later steps skip. Lift the bound with the
+    # pytest-xdist release that carries pytest-dev/pytest-xdist#1388;
+    # tests/util/test_xdist_groups.py fails while the pair still splits groups.
+    "pytest>=9,<9.2",
     "pytest-xdist[setproctitle]>=3.8",
 ]
 ci = [
