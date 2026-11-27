@@ -173,7 +173,7 @@ def git_dirs_outside(repo):
     )
     if found.returncode != 0:
         return []
-    paths = {(repo / line).resolve() for line in found.stdout.split()}
+    paths = {(repo / line).resolve() for line in found.stdout.splitlines()}
     return sorted(str(p) for p in paths if not p.is_relative_to(repo.resolve()))
 
 

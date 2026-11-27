@@ -17,7 +17,7 @@ REPO = Path(__file__).resolve().parents[2]
 RUN = REPO / "docker" / "run"
 
 
-def dry_run(tmp_path, *args, env=None, cwd=None):
+def dry_run(tmp_path, *args, env=None, cwd=None, run=RUN):
     """docker/run --dry-run: (variables, compose argv), or the error text."""
     base = {
         "PATH": os.environ["PATH"],
@@ -25,9 +25,9 @@ def dry_run(tmp_path, *args, env=None, cwd=None):
         "FINN_BUILD_DIR": str(tmp_path / "build"),
     }
     result = subprocess.run(
-        [sys.executable, RUN, "--dry-run", *args],
+        [sys.executable, run, "--dry-run", *args],
         env={**base, **(env or {})},
-        cwd=cwd or REPO,
+        cwd=cwd or run.parents[1],
         capture_output=True,
         text=True,
     )
@@ -179,3 +179,27 @@ def test_a_worktrees_git_directories_are_mounted(tmp_path):
     _, argv = dry_run(tmp_path)
     git_dir = common.stdout.strip()
     assert f"{git_dir}:{git_dir}" in volumes(argv)
+
+
+def worktree(tmp_path, common):
+    """A worktree of a repository at `common` holding docker/run: its launcher, and the
+    git directories it must mount."""
+    git = ["git", "-c", "user.name=test", "-c", "user.email=test@localhost"]
+    for source in (RUN, REPO / "src/finn/util/paths.py"):
+        target = common / source.relative_to(REPO)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(source, target)
+    subprocess.run([*git, "init", "--quiet"], cwd=common, check=True)
+    subprocess.run([*git, "add", "."], cwd=common, check=True)
+    subprocess.run([*git, "commit", "--quiet", "-m", "fixture"], cwd=common, check=True)
+    checkout = tmp_path / "checkout"
+    subprocess.run(
+        [*git, "worktree", "add", "--quiet", "--detach", checkout], cwd=common, check=True
+    )
+    return checkout / "docker/run", [common / ".git", common / ".git/worktrees/checkout"]
+
+
+def test_git_directories_with_spaces_are_mounted_whole(tmp_path):
+    run, git_dirs = worktree(tmp_path, tmp_path / "repository with spaces")
+    _, argv = dry_run(tmp_path, run=run)
+    assert [v for v in volumes(argv) if "/.git" in v] == [f"{d}:{d}" for d in git_dirs]
