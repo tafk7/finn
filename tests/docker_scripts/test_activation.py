@@ -13,6 +13,8 @@ import sys
 from packaging.requirements import Requirement
 from pathlib import Path
 
+from finn.util import launcher
+
 REPO = Path(__file__).resolve().parents[2]
 PROFILE_SH = str(REPO / "docker/profile.sh")
 sys.path.insert(0, str(REPO / "docker"))
@@ -97,6 +99,116 @@ def test_a_jobs_install_root_and_release_select_the_release(tmp_path, layout):
     (other / "settings64.sh").write_text("")
     out = profile(tmp_path, 'echo "$XILINX_VIVADO"', XILINX_VIVADO=str(other), **job)
     assert out.strip() == str(other)
+
+
+@pytest.mark.parametrize(
+    "version, layout, hls",
+    [
+        # xbuilds' separate trees: Vitis HLS inside Vitis from 2024.2, its own before.
+        ("2024.2", "{tool}/{version}", None),
+        ("2023.2", "{tool}/{version}", "Vitis_HLS"),
+        ("2025.2", "{version}/{tool}", None),
+    ],
+)
+def test_a_jobs_release_gets_vitis_and_run_dockers_names(tmp_path, version, layout, hls):
+    root = tmp_path / "Xilinx"
+    trees = {}
+    for tool in ("Vivado", "Vitis", "Vitis_HLS"):
+        trees[tool] = root / layout.format(tool=tool, version=version)
+        if tool != "Vitis_HLS" or hls:
+            trees[tool].mkdir(parents=True)
+            (trees[tool] / "settings64.sh").write_text(
+                f'export PATH="{trees[tool]}/bin:$PATH" SOURCED="$SOURCED {tool}"\n'
+            )
+    job = {"FINN_XILINX_PATH": str(root), "FINN_XILINX_VERSION": version}
+    probe = 'echo "$XILINX_VITIS|$VIVADO_PATH|$VITIS_PATH|$HLS_PATH|$SOURCED|${finn_vitis-unset}"'
+    vitis, vivado_path, vitis_path, hls_path, sourced, scratch = (
+        profile(tmp_path, probe, **job).strip().split("|")
+    )
+    assert vitis == vitis_path == str(trees["Vitis"])
+    assert vivado_path == str(trees["Vivado"])
+    assert hls_path == str(trees["Vitis_HLS"] if hls else trees["Vitis"])
+    assert sourced.split() == ["Vivado", "Vitis"] + (["Vitis_HLS"] if hls else [])
+    assert scratch == "unset"
+
+
+def test_a_unified_release_is_not_sourced_twice_and_given_names_stay(tmp_path):
+    # From 2025.1, Vivado's settings64.sh sets up Vitis as well.
+    vivado = tmp_path / "Xilinx/2025.2/Vivado"
+    vitis = tmp_path / "Xilinx/2025.2/Vitis"
+    for tree in (vivado, vitis):
+        tree.mkdir(parents=True)
+    (vivado / "settings64.sh").write_text(f"export XILINX_VITIS={vitis} SOURCED=1\n")
+    (vitis / "settings64.sh").write_text("SOURCED=$((SOURCED + 1))\n")
+    out = profile(
+        tmp_path,
+        'echo "$SOURCED|$VITIS_PATH|$HLS_PATH|$VIVADO_PATH"',
+        FINN_XILINX_PATH=str(tmp_path / "Xilinx"),
+        FINN_XILINX_VERSION="2025.2",
+        VIVADO_PATH="/site/vivado",
+    )
+    assert out.strip() == f"1|{vitis}|{vitis}|/site/vivado"
+    # The launcher's XILINX_VIVADO gets the names too.
+    out = profile(tmp_path, 'echo "$VIVADO_PATH|$VITIS_PATH"', XILINX_VIVADO=str(vivado))
+    assert out.strip() == f"{vivado}|{vitis}"
+
+
+def test_a_callers_bash_env_runs_after_finns_and_its_tools_come_first(tmp_path):
+    # As the FINN job starts the container: an LSF kit's enable.sh as BASH_ENV, which
+    # puts its shim directory on PATH (once), and FINN_TOOL_DIR_OVERRIDE naming it.
+    kit = tmp_path / "finn-lsf"
+    (kit / "shim").mkdir(parents=True)
+    (kit / "enable.sh").write_text(
+        'case ":$PATH:" in *":KIT/shim:"*) ;; *) export PATH="KIT/shim:$PATH" ;; esac\n'
+        'echo "enable.sh" >&2\n'.replace("KIT", str(kit))
+    )
+    vivado = tmp_path / "Xilinx/Vivado/2024.2"
+    vivado.mkdir(parents=True)
+    (vivado / "settings64.sh").write_text(f'export PATH="{vivado}/bin:$PATH"\n')
+    entrypoint = tmp_path / "entrypoint"
+    entrypoint.write_text(
+        f"set -eo pipefail\n. {PROFILE_SH}\n"
+        "exec /bin/bash -c 'echo \"$BASH_ENV|$FINN_CALLER_BASH_ENV|$PATH\"'\n"
+    )
+    proc = subprocess.run(
+        ["/bin/bash", str(entrypoint)],
+        capture_output=True,
+        text=True,
+        env={
+            "PATH": "/usr/bin:/bin",
+            "HOME": str(tmp_path / "home"),
+            "BASH_ENV": str(kit / "enable.sh"),
+            "FINN_TOOL_DIR_OVERRIDE": str(kit / "shim"),
+            "FINN_XILINX_PATH": str(tmp_path / "Xilinx"),
+            "FINN_XILINX_VERSION": "2024.2",
+        },
+    )
+    assert proc.returncode == 0, proc.stderr
+    bash_env, caller, path = proc.stdout.strip().split("|")
+    # The image's profile stays BASH_ENV; the caller's runs after it, in every bash.
+    assert bash_env == "/etc/profile.d/finn.sh" and caller == str(kit / "enable.sh")
+    assert proc.stderr.count("enable.sh") >= 2
+    # The kit's tools ahead of the release's, once.
+    assert path.split(":")[:2] == [str(kit / "shim"), f"{vivado}/bin"]
+    assert path.split(":").count(str(kit / "shim")) == 1
+
+
+def test_a_jobs_tool_directory_wins_over_the_release_on_path(tmp_path, monkeypatch):
+    # The LSF kit's shims name no release; a vivado of another release on PATH is not
+    # what the launcher picks.
+    shim, other = tmp_path / "finn-lsf/shim", tmp_path / "Xilinx/2025.2/Vivado/bin"
+    for directory in (shim, other):
+        directory.mkdir(parents=True)
+        (directory / "vivado").write_text("#!/bin/sh\n")
+        (directory / "vivado").chmod(0o755)
+    monkeypatch.setenv("XILINX_VIVADO", str(tmp_path / "Xilinx/Vivado/2024.2"))
+    monkeypatch.setenv("PATH", f"{other}:{os.environ['PATH']}")
+    monkeypatch.setenv(launcher.TOOL_DIR_ENV, str(shim))
+    launcher.xilinx_tool.cache_clear()
+    try:
+        assert launcher.xilinx_tool("vivado") == str(shim / "vivado")
+    finally:
+        launcher.xilinx_tool.cache_clear()
 
 
 def test_a_jobs_missing_release_stops_the_container_start(tmp_path):
