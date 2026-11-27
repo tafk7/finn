@@ -402,7 +402,7 @@ class QuantReluHandler(QuantActBaseHandler):
             # Gather parameters
             q_inst = getCustomOp(self._q_node)
             if self._q_node.op_type == "Quant":
-                bit_width = self._model.get_initializer(self._q_node.input[3])
+                bit_width = self._model.get_initializer(self._q_node.input[3]).item()
                 narrow = q_inst.get_nodeattr("narrow")
             elif self._q_node.op_type == "BipolarQuant":
                 bit_width = 1.0
@@ -424,7 +424,7 @@ class QuantReluHandler(QuantActBaseHandler):
     def _calculate_thresholds(self):
         # Gather parameters
         if self._q_node.op_type == "Quant":
-            bit_width = self._model.get_initializer(self._q_node.input[3])
+            bit_width = self._model.get_initializer(self._q_node.input[3]).item()
         elif self._q_node.op_type == "BipolarQuant":
             bit_width = 1.0
         else:
@@ -570,7 +570,7 @@ class QuantIdentityHandler(QuantActBaseHandler):
         # Gather parameters
         q_inst = getCustomOp(self._q_node)
         if self._q_node.op_type == "Quant":
-            bit_width = self._model.get_initializer(self._q_node.input[3])
+            bit_width = self._model.get_initializer(self._q_node.input[3]).item()
             narrow = q_inst.get_nodeattr("narrow")
             signed = q_inst.get_nodeattr("signed")
         elif self._q_node.op_type == "BipolarQuant":
@@ -598,7 +598,7 @@ class QuantIdentityHandler(QuantActBaseHandler):
         quant_scale = self._model.get_initializer(self._q_node.input[1])
         q_inst = getCustomOp(self._q_node)
         if self._q_node.op_type == "Quant":
-            bit_width = self._model.get_initializer(self._q_node.input[3])
+            bit_width = self._model.get_initializer(self._q_node.input[3]).item()
             narrow = q_inst.get_nodeattr("narrow")
             signed = q_inst.get_nodeattr("signed")
         elif self._q_node.op_type == "BipolarQuant":
@@ -668,7 +668,7 @@ class QuantIdentityHandler(QuantActBaseHandler):
     def _calculate_act_scale(self):
         # Gather parameters
         if self._q_node.op_type == "Quant":
-            bit_width = self._model.get_initializer(self._q_node.input[3])
+            bit_width = self._model.get_initializer(self._q_node.input[3]).item()
         elif self._q_node.op_type == "BipolarQuant":
             bit_width = 1.0
         else:
