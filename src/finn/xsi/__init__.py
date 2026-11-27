@@ -33,6 +33,7 @@ def is_available() -> bool:
     Returns:
         bool: True if finn_xsi can be imported, False otherwise
     """
+    # Try loading the modules (this will cache them if successful)
     return _load_modules()
 
 
@@ -67,6 +68,7 @@ def _build_on_first_use(force: bool) -> bool:
     from finn.xsi.setup import build_xsi  # noqa: PLC0415
 
     logging.info("Building finn_xsi for %s in %s", amd_path("XILINX_VIVADO"), build_dir())
+    # finn_xsi is optional, so a failed build is non-fatal
     _build_failed = not build_xsi(force=force, verbose=False)
     return not _build_failed
 
@@ -100,6 +102,7 @@ def _import_built() -> bool:
 
         return True
     except ImportError as e:
+        # Log the specific import error for debugging
         logging.debug(f"Failed to import finn_xsi modules: {e}")
         _import_error = str(e)
         return False

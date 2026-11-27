@@ -33,4 +33,5 @@ fi
 if [ -n "${FINN_TOOL_DIR_OVERRIDE:-}" ]; then
     python -m finn.resources fetch --kind hls-include >/dev/null
 fi
+# execute the provided command(s)
 exec "$@"

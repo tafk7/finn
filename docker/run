@@ -86,6 +86,7 @@ def main(argv=None):
         "FINN_HOME": str(paths.home().absolute()),
         "FINN_BUILD_DIR": str(paths.scratch()),
     }
+    # ensure build dir exists locally
     for directory in (env["FINN_HOME"], env["FINN_BUILD_DIR"]):
         os.makedirs(directory, exist_ok=True)
     volumes = list(args.volume)
@@ -121,6 +122,8 @@ def main(argv=None):
     argv += ["run", "--rm", "--pull", "never"]
     if args.notebook:
         argv.append("--service-ports")
+    # Drop the pseudo-TTY when stdin is not a terminal (e.g. Jenkins), so that the run
+    # does not fail with "the input device is not a TTY".
     if not sys.stdin.isatty():
         argv.append("-T")
     for volume in volumes:

@@ -17,6 +17,7 @@ if [ -z "${FINN_PROFILE:-}" ]; then
         export NSS_WRAPPER_PASSWD="$FINN_HOME/identity/$(id -u)/passwd"
         export NSS_WRAPPER_GROUP="$FINN_HOME/identity/$(id -u)/group"
     fi
+    # env scripts may return non-zero, so do not let that abort the container
     if [ -n "${XILINX_VIVADO:-}" ] && [ -f "$XILINX_VIVADO/settings64.sh" ]; then
         . "$XILINX_VIVADO/settings64.sh" >/dev/null 2>&1 || true
     fi
