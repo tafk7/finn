@@ -17,7 +17,7 @@ from finn.xsi._build_config import LINK_ARGS, get_build_paths
 
 
 @lru_cache(maxsize=32)
-def _compiler_version(path, modified, size):
+def _compiler_version(path: str, modified: float, size: int) -> str:
     try:
         return run_tool([path, "--version"]).stdout.decode()
     except (OSError, ToolFailed, ToolUnavailable):
