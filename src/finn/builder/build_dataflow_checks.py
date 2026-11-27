@@ -69,7 +69,7 @@ def _release_check(name, key, v, what):
         name,
         Severity.ERROR,
         not releases.affects(key, v),
-        f"{what} requires Vivado {minimum} or later, found {v[0]}.{v[1]}",
+        f"{what} requires Vivado {minimum} or later, found {releases.name(v)}",
         f"Upgrade to Vivado {minimum} or later",
     )
 
@@ -93,7 +93,6 @@ def _cfg_default(field_name):
 def run_all_config_checks(cfg: DataflowBuildConfig) -> Report:
     """Run all configuration checks and return report."""
     v = get_vivado_version()
-    # for the check messages; v is None without Vivado (XILINX_VIVADO unset)
     checks = []
 
     has_bitfile = cfg.generate_outputs and DataflowOutputType.BITFILE in cfg.generate_outputs

@@ -1,8 +1,8 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""FINN's two directories. Standard library only: the resource cache uses them before
-FINN's dependencies are installed."""
+"""FINN's two directories. Standard library only: the resource cache and docker/run use
+them without FINN's dependencies."""
 import os
 from pathlib import Path
 

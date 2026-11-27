@@ -130,18 +130,18 @@ def unavailable_message() -> str:
         )
     if _build_failed:
         return (
-            f"finn_xsi did not build for this Vivado installation and Python environment; "
-            f"the compiler's output is in {build_dir() / 'compile_xsi.stderr.log'}. "
-            f"Retry with: python -m finn.xsi.setup --force"
+            "FINN's XSim binding (finn_xsi) did not build for this Vivado installation and "
+            f"Python environment; the compiler's output is in "
+            f"{build_dir() / 'compile_xsi.stderr.log'}. Retry with python -m finn.xsi.setup --force"
         )
     if _import_error and (build_dir() / "xsi.so").exists():
         return (
-            f"finn_xsi is built ({build_dir() / 'xsi.so'}) but does not load here: "
-            f"{_import_error}. Rebuild it: python -m finn.xsi.setup --force"
+            f"FINN's XSim binding (finn_xsi) is built ({build_dir() / 'xsi.so'}) but does not "
+            f"load here: {_import_error}. Rebuild it with python -m finn.xsi.setup --force"
         )
     return (
-        f"finn_xsi is not built for this Vivado installation and Python environment "
-        f"(expected {build_dir() / 'xsi.so'}). Run: python -m finn.xsi.setup"
+        "FINN's XSim binding (finn_xsi) is not built for this Vivado installation and Python "
+        f"environment (expected {build_dir() / 'xsi.so'}). Build it with python -m finn.xsi.setup"
     )
 
 

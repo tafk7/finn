@@ -12,7 +12,7 @@ from pathlib import Path
 
 from finn import resources
 from finn.resources import _store
-from finn.util.launcher import amd_path
+from finn.util.launcher import amd_path, not_set_up
 from finn.util.paths import home
 
 GOLDEN_FILES = ("golden_ref.tcl", "golden_noc.ncr", "golden_routed.dcp")
@@ -23,7 +23,9 @@ def board_files() -> str:
     override = os.environ.get("FINN_BOARD_FILES_PATH")
     if override:
         if not Path(override).is_dir():
-            raise resources.ResourceError("board-path-missing", override)
+            raise resources.ResourceError(
+                "board-path-missing", f"FINN_BOARD_FILES_PATH={override} is not a directory"
+            )
         return str(Path(override).resolve())
     sources = _board_sources()
     digest = _board_digest(sources)
@@ -123,8 +125,9 @@ def golden() -> str:
         # A site-supplied reference is used as is.
         return str(output)
     if not amd_path("XILINX_VIVADO"):
-        raise RuntimeError(
-            "The VCK190 golden reference is built with Vivado: source a release's settings64.sh"
+        raise not_set_up(
+            "vivado",
+            "the VCK190 golden reference is built with Vivado, but XILINX_VIVADO is not set",
         )
     identity = _golden_identity()
     digest = _golden_digest(identity)

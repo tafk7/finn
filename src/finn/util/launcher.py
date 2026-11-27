@@ -31,6 +31,8 @@ from typing import Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 from finn.util import vivado
 from finn.util.build_log import FILE_ONLY, in_run
+from finn.util.releases import Release
+from finn.util.releases import name as release_name
 
 StrPath = Union[str, os.PathLike]
 
@@ -114,18 +116,16 @@ def amd_path(name: str) -> Optional[str]:
     return os.environ.get(name) or None
 
 
-def release_of(path: StrPath) -> Optional[Tuple[int, int]]:
+def release_of(path: StrPath) -> Optional[Release]:
     """Return the AMD release (year, half) that ``path`` lies in, or None."""
     found = _RELEASE.findall(os.fspath(path))
     return (int(found[-1][0]), int(found[-1][1])) if found else None
 
 
-def installed_releases(
-    roots: Optional[Sequence[str]] = None,
-) -> List[Tuple[Tuple[int, int], str]]:
+def installed_releases(roots: Optional[Sequence[str]] = None) -> List[Tuple[Release, str]]:
     """Return ``(release, settings64.sh)`` for each Vivado release under ``roots``, in
     both of AMD's layouts, newest first."""
-    found: Dict[Tuple[int, int], str] = {}
+    found: Dict[Release, str] = {}
     for root in INSTALL_ROOTS if roots is None else roots:
         root = os.path.expanduser(root)
         for pattern in ("*/Vivado/settings64.sh", "Vivado/*/settings64.sh"):
@@ -144,10 +144,10 @@ def setup_hint(roots: Optional[Sequence[str]] = None) -> str:
             "Install the AMD tools and source a release's settings64.sh "
             "(<root>/<release>/Vivado/settings64.sh), or load the site's Vivado module."
         )
-    (year, half), script = releases[0]
-    hint = f"To use Vivado {year}.{half}: source {script}"
+    newest, script = releases[0]
+    hint = f"To use Vivado {release_name(newest)}: source {script}"
     if len(releases) > 1:
-        others = ", ".join(f"{y}.{h}" for (y, h), _ in releases[1:])
+        others = ", ".join(release_name(release) for release, _ in releases[1:])
         hint += f" (also installed: {others})"
     return hint
 
@@ -156,7 +156,10 @@ class ToolchainMismatch(RuntimeError):
     """AMD tools from different releases in one environment."""
 
 
-def expected_release() -> Optional[Tuple[int, int]]:
+_ONE_RELEASE = "Start FINN from a shell that sourced one release's settings64.sh."
+
+
+def expected_release() -> Optional[Release]:
     """Return the release of the AMD tools set up in this environment, or None.
     Raises ``ToolchainMismatch`` if the AMD variables name different releases."""
     releases = {}
@@ -169,7 +172,7 @@ def expected_release() -> Optional[Tuple[int, int]]:
         raise ToolchainMismatch(
             "the AMD tools in this environment come from different releases: "
             + ", ".join(f"{name}={path}" for name, (_, path) in releases.items())
-            + ". Start FINN from a shell that sourced one release's settings64.sh."
+            + f". {_ONE_RELEASE}"
         )
     return next(iter(releases.values()))[0] if releases else None
 
@@ -223,9 +226,8 @@ def xilinx_tool(name: str) -> str:
     found = release_of(os.path.realpath(path)) or release_of(path)
     if expected and found and found != expected:
         raise ToolchainMismatch(
-            f"{name} on PATH is {path} (release {found[0]}.{found[1]}), but the AMD "
-            f"variables name release {expected[0]}.{expected[1]}. Start FINN from a shell "
-            "that sourced one release's settings64.sh."
+            f"{name} on PATH is {path} (release {release_name(found)}), but the AMD tools "
+            f"set up in this environment are release {release_name(expected)}. {_ONE_RELEASE}"
         )
     return path
 

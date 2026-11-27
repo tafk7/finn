@@ -140,7 +140,7 @@ def _verified_tree(resource, work):
     if offline() and not copy:
         raise ResourceError(
             "resource-offline",
-            f"Resource {resource.name} is not cached; offline fetching is disabled",
+            f"Resource {resource.name} is not cached, and {PREFIX}OFFLINE is set",
         )
 
     def places():

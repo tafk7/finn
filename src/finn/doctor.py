@@ -47,10 +47,6 @@ class Report:
         return any(f.state == FAIL for f in self.findings)
 
 
-def _release_name(release) -> str:
-    return "%d.%d" % release if release else "unknown"
-
-
 def _tool(report, name) -> bool:
     try:
         return report.add("AMD tools", name, OK, launcher.xilinx_tool(name))
@@ -79,7 +75,9 @@ def check_tools(report):
     except ToolchainMismatch as error:
         report.add(section, "release", FAIL, str(error))
         return {}
-    report.add(section, "release", OK, _release_name(report.release))
+    report.add(
+        section, "release", OK, releases.name(report.release) if report.release else "unknown"
+    )
     for name, path in set_up.items():
         if path:
             report.add(section, name, OK, path)
@@ -99,10 +97,9 @@ def check_tools(report):
             found["headers"] = report.add(section, "HLS headers", OK, launcher.hls_root())
         except ToolUnavailable as error:
             found["headers"] = report.add(section, "HLS headers", FAIL, error.reason)
-    current = report.release
-    others = [r for r, _ in launcher.installed_releases() if r != current]
+    others = [r for r, _ in launcher.installed_releases() if r != report.release]
     if others:
-        report.add(section, "also installed", NOTE, ", ".join(map(_release_name, others)))
+        report.add(section, "also installed", NOTE, ", ".join(map(releases.name, others)))
     return found
 
 
@@ -116,14 +113,18 @@ def check_host(report):
         OK if compiler else WARN,
         f"{compiler}: {_first_line([compiler, '--version'])}"
         if compiler
-        else "not found: cppsim and the XSim binding need it",
+        else "not found: cppsim and the XSim binding need it; install g++",
     )
     header = os.path.join(sysconfig.get_paths()["include"], "Python.h")
     found["headers"] = report.add(
         section,
         "Python headers",
         OK if os.path.isfile(header) else WARN,
-        header if os.path.isfile(header) else f"no {header}: the XSim binding needs them",
+        (
+            header
+            if os.path.isfile(header)
+            else f"no {header}: the XSim binding needs them; install Python's development headers"
+        ),
     )
     licences = [n for n in ("XILINXD_LICENSE_FILE", "LM_LICENSE_FILE") if os.environ.get(n)]
     report.add(
@@ -158,7 +159,7 @@ def check_xsi(report) -> Optional[str]:
         from finn.xsi.paths import build_dir  # noqa: PLC0415
 
         directory = build_dir()
-    except Exception as error:  # noqa: BLE001 (a report, not a build)
+    except Exception as error:
         report.add("FINN", "XSim binding", WARN, f"cannot locate: {error}")
         return "failed"
     if (directory / "xsi.so").exists():
@@ -166,7 +167,12 @@ def check_xsi(report) -> Optional[str]:
         return "built"
     log = directory / "compile_xsi.stderr.log"
     if log.exists():
-        report.add("FINN", "XSim binding", WARN, f"its last build failed; see {log}")
+        report.add(
+            "FINN",
+            "XSim binding",
+            WARN,
+            f"its last build failed; see {log}, and retry with python -m finn.xsi.setup --force",
+        )
         return "failed"
     report.add("FINN", "XSim binding", NOTE, f"builds on first use, into {directory}")
     return "first-use"
@@ -177,13 +183,13 @@ def check_resources(report):
 
     try:
         declared = resources.declarations()
-    except Exception as error:  # noqa: BLE001
+    except Exception as error:
         report.add("Resources", "declarations", FAIL, str(error))
         return
     for name in declared:
         try:
             status = resources.status(name)
-        except Exception as error:  # noqa: BLE001
+        except Exception as error:
             report.add("Resources", name, FAIL, str(error))
             continue
         if status.state == "missing":
@@ -243,7 +249,7 @@ def diagnose() -> Report:
     if report.release:
         for note in releases.notes_for(report.release):
             report.add(
-                f"Known differences of release {_release_name(report.release)}",
+                f"Known differences of release {releases.name(report.release)}",
                 f"{note.tools} ({note.releases()})",
                 NOTE,
                 f"{note.differs} FINN {note.finn_does}",
@@ -274,7 +280,7 @@ def main(argv=None) -> int:
         print(
             json.dumps(
                 {
-                    "release": _release_name(report.release) if report.release else None,
+                    "release": releases.name(report.release) if report.release else None,
                     "findings": [asdict(f) for f in report.findings],
                 },
                 indent=2,

@@ -80,7 +80,7 @@ def build_xsi(force: bool = False, verbose: bool = True) -> bool:
     xsi_path = build_dir()
 
     if not source_dir().exists():
-        print(f"Error: finn_xsi source not found at {xsi_path}")
+        print(f"Error: finn_xsi source not found at {source_dir()}")
         return False
 
     # Check if already built

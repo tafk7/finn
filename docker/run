@@ -18,6 +18,7 @@ it): finn:dev, finn:dev-<runtime> with --runtime (xrt, slash), finn:release with
 --release (FINN from its wheel). COMPOSE_FILE adds further Compose files.
 """
 import argparse
+import importlib.util
 import os
 import shlex
 import shutil
@@ -30,6 +31,14 @@ REPO = Path(__file__).resolve().parents[1]
 
 def fail(message):
     sys.exit(f"docker/run: {message}")
+
+
+def finn_paths():
+    """finn.util.paths, from the checkout: FINN is not installed on the host."""
+    spec = importlib.util.spec_from_file_location("finn_paths", REPO / "src/finn/util/paths.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def host_paths(variable):
@@ -67,17 +76,15 @@ def main(argv=None):
     image = (
         os.environ.get("FINN_IMAGE") or ("finn:release" if args.release else "finn:dev") + suffix
     )
-    uid, gid = os.getuid(), os.getgid()
+    paths = finn_paths()
     env = {
         "FINN_IMAGE": image,
-        "FINN_UID": str(uid),
-        "FINN_GID": str(gid),
+        "FINN_UID": str(os.getuid()),
+        "FINN_GID": str(os.getgid()),
         "FINN_ROOT": str(REPO),
         "FINN_WORKDIR": os.getcwd(),
-        "FINN_HOME": os.path.abspath(os.path.expanduser(os.environ.get("FINN_HOME", "~/.finn"))),
-        "FINN_BUILD_DIR": os.path.abspath(
-            os.environ.get("FINN_BUILD_DIR", f"/tmp/finn_build_{uid}")
-        ),
+        "FINN_HOME": str(paths.home().absolute()),
+        "FINN_BUILD_DIR": str(paths.scratch()),
     }
     for directory in (env["FINN_HOME"], env["FINN_BUILD_DIR"]):
         os.makedirs(directory, exist_ok=True)
@@ -129,14 +136,14 @@ def main(argv=None):
             print(f"{key}={shlex.quote(value)}")
         print(shlex.join(argv))
         return
+    if not shutil.which("docker"):
+        fail("docker is not installed")
     missing = subprocess.run(["docker", "image", "inspect", image], capture_output=True).returncode
     if args.build or (missing and not args.no_build):
         bake_env["FINN_VERSION"] = finn_version()
         subprocess.run(bake, cwd=REPO, env={**os.environ, **bake_env}, check=True)
     elif missing:
-        fail(f"no image {image}, and --no-build")
-    if not shutil.which("docker"):
-        fail("docker is not installed")
+        fail(f"there is no image {image}: build it with docker/run --build, or drop --no-build")
     os.execvpe("docker", argv, {**os.environ, **env})
 
 

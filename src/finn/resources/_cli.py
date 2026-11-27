@@ -97,10 +97,11 @@ def _fetch(args):
 
 def _golden(args):
     from finn.resources import prepare  # noqa: PLC0415
+    from finn.util.launcher import ToolUnavailable  # noqa: PLC0415
 
     try:
         print(prepare.golden())
-    except RuntimeError as error:
+    except (RuntimeError, ToolUnavailable) as error:
         print(f"finn resources: error: {error}", file=sys.stderr)
         return 1
 

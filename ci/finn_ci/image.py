@@ -104,7 +104,7 @@ def supplied_packages(runtimes, root=REPO):
         if values["SOURCE"] == "fetch":
             continue
         if values["SOURCE"] != "supply" or not values["FILES"].split():
-            raise ImageError("invalid runtime SOURCE/FILES in %s" % manifest)
+            raise ImageError("%s: SOURCE must be fetch, or supply with FILES" % manifest)
         for filename in values["FILES"].split():
             relative = Path(filename)
             if relative.is_absolute() or ".." in relative.parts:
@@ -273,16 +273,21 @@ def read_metadata(directory, runtimes):
         or not IMAGE_ID.fullmatch(published_id)
         or info.get("image_id") != published_id
     ):
-        raise ImageError("malformed or mismatched image identity at %s" % directory)
+        raise ImageError(
+            "malformed or mismatched image identity at %s; publish it again" % directory
+        )
     if not reference or "\n" in reference:
-        raise ImageError("malformed published image reference at %s" % directory)
+        raise ImageError("malformed published image reference at %s; publish it again" % directory)
     for key, expected in (
         ("environment_revision", revision(runtimes)),
         ("lock_sha256", sha256(REPO / "uv.lock")),
         ("runtimes", runtimes),
     ):
         if info.get(key) != expected:
-            raise ImageError("published %s=%r; requested %r" % (key, info.get(key), expected))
+            raise ImageError(
+                "published %s=%r; requested %r: %s holds an image of other inputs"
+                % (key, info.get(key), expected, directory)
+            )
     return published_id, reference, info
 
 
@@ -370,7 +375,7 @@ def publish(directory, reference, workspace, runtimes):
             or previous["source_revision"] != info["source_revision"]
         ):
             raise ImageError(
-                "build directory already contains another image/source: %s" % directory
+                "%s already holds another image/source; publish into a new directory" % directory
             )
         # Shards load the archive, so a retry must not accept a damaged one.
         try:
@@ -451,7 +456,7 @@ def _docker_load(archive, expected):
         if digest.hexdigest() != expected:
             # Abort before docker load sees the end of the stream.
             stop(process)
-            raise ImageError("published image archive checksum mismatch")
+            raise ImageError("published image archive checksum mismatch: %s is damaged" % archive)
         process.stdin.close()
     except BaseException:
         if process.poll() is None:
@@ -470,7 +475,7 @@ def load(directory, runtimes):
     if not archive.is_file():
         raise ImageError("incomplete image publication: the archive is missing")
     if not re.fullmatch(r"[0-9a-f]{64}", info.get("archive_sha256", "")):
-        raise ImageError("malformed archive checksum metadata")
+        raise ImageError("malformed archive checksum at %s; publish it again" % directory)
     if not _loaded(published_id):
         # Host-local, not an NFS lock: agents with their own daemons load in parallel.
         lock = os.environ.get("FINN_DOCKER_LOAD_LOCK", "/tmp/finn-docker-load.lock")
