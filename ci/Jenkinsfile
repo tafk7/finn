@@ -166,6 +166,7 @@ pipeline {
           checkoutPinned()
           wipeStaleWorkspace()
           announceCiMode()
+          announceDockerExtra()
           loadStageConfig()
           prepareTimingState()
           validateShards()
@@ -216,6 +217,13 @@ void announceCiMode() {
 [finn-ci]   - no persistent timing master (cold-start round-robin each build)
 [finn-ci]   - no per-agent NFS caches (downloads are cached per workspace only)"""
   }
+}
+
+// How docker/run applies the job's FINN_DOCKER_EXTRA (a Compose override, or plain
+// `docker run` with the arguments as given) and why; it names flags, never values,
+// and stops the build when the string does not split as shell words.
+void announceDockerExtra() {
+  sh './docker/run --explain-extra'
 }
 
 // One subprocess loads the full Validate-time config bundle. validate_config()
@@ -1068,10 +1076,6 @@ void withAgentNfsEnv(Closure body) { withAgentNfsEnv([:], body) }
 // Build-Docker-Image stage passes exposeSharedImage:false because imageDir is
 // not published there yet; it builds the image itself.
 void withAgentNfsEnv(Map opts, Closure body) {
-  if (env.FINN_DOCKER_EXTRA) {
-    error "FINN_DOCKER_EXTRA is no longer read. Put its mounts and variables in a " +
-          "Compose file named in COMPOSE_FILE (ci/README.md, \"DSL environment variables\")."
-  }
   String node = env.NODE_NAME ?: 'localhost'
   prepareAgentCaches(node)
   List<String> envList = agentCachesEnv()

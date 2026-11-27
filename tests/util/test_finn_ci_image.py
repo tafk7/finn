@@ -198,6 +198,8 @@ def test_build_bakes_the_finn_target_under_the_tag(clean, tmp_path, monkeypatch)
         fake_docker(
             tmp_path / "bin",
             "built = pathlib.Path(%r)\n"
+            'if sys.argv[1:3] == ["buildx", "version"]:\n'
+            "    sys.exit(0)\n"
             'if sys.argv[1:3] == ["image", "inspect"]:\n'
             "    if not built.exists(): sys.exit(1)\n"
             "    print(json.dumps([{'Id': %r}]))\n"
@@ -215,6 +217,68 @@ def test_build_bakes_the_finn_target_under_the_tag(clean, tmp_path, monkeypatch)
     built.write_text("present")
     assert image.build(["xrt"], if_missing=True) == IMAGE_ID
     assert built.read_text() == "present"  # not rebuilt
+
+
+def test_without_buildx_docker_build_builds_the_same_target(clean, tmp_path, monkeypatch):
+    built = tmp_path / "built"
+    monkeypatch.setenv(
+        "PATH",
+        fake_docker(
+            tmp_path / "bin",
+            "built = pathlib.Path(%r)\n"
+            'if sys.argv[1] == "buildx":\n'
+            '    sys.stderr.write("docker: unknown command: docker buildx\\n"); sys.exit(1)\n'
+            'if sys.argv[1:3] == ["image", "inspect"]:\n'
+            "    if not built.exists(): sys.exit(1)\n"
+            "    print(json.dumps([{'Id': %r}]))\n"
+            "else:\n"
+            "    built.write_text(json.dumps([sys.argv[1:], os.environ['DOCKER_BUILDKIT']]))\n"
+            % (str(built), IMAGE_ID),
+        ),
+    )
+    reference = image.tag(["xrt"])
+    assert image.build(["xrt"]) == IMAGE_ID
+    argv, buildkit = json.loads(built.read_text())
+    assert buildkit == "1"
+    assert argv == image.docker_build_argv(reference, ["xrt"])[1:]
+    assert argv[:6] == ["build", "-f", "docker/Dockerfile", "--target", "finn", "--platform"]
+    assert argv[argv.index("--tag") + 1] == reference and argv[-1] == "."
+    args = [argv[i + 1] for i, a in enumerate(argv) if a == "--build-arg"]
+    assert args == [
+        "UBUNTU_TAG=" + image.bake_default("UBUNTU_TAG"),
+        "FINN_RUNTIMES=xrt",
+        "FINN_VERSION=",
+    ]
+    monkeypatch.setenv("UBUNTU_TAG", "noble-20250101")
+    assert "UBUNTU_TAG=noble-20250101" in image.docker_build_argv(reference, ["xrt"])
+
+
+@pytest.mark.skipif(not has_bake(), reason="needs Docker Buildx")
+def test_docker_build_matches_bakes_finn_target(clean):
+    """The fallback builds what Bake would: Dockerfile, target, platform, args, labels."""
+    reference = "finn:ci-0123456789abcdef-slash-xrt"
+    proc = subprocess.run(
+        ["docker", "buildx", "bake", "-f", "docker-bake.hcl", "--print"]
+        + ["--set", "finn.tags=" + reference, "finn"],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        # build() hands Bake the runtimes normalized, as it does here.
+        env=dict(os.environ, FINN_RUNTIMES="slash,xrt"),
+    )
+    assert proc.returncode == 0, proc.stderr
+    baked = json.loads(proc.stdout[proc.stdout.index("{") :])["target"]["finn"]
+    argv = image.docker_build_argv(reference, ["xrt", "slash"])
+
+    def values(flag):
+        return dict(argv[i + 1].split("=", 1) for i, a in enumerate(argv) if a == flag)
+
+    assert argv[argv.index("-f") + 1] == baked["dockerfile"]
+    assert argv[argv.index("--target") + 1] == baked["target"]
+    assert [argv[argv.index("--platform") + 1]] == baked["platforms"]
+    assert [argv[argv.index("--tag") + 1]] == baked["tags"]
+    assert values("--build-arg") == baked["args"]
+    assert values("--label") == baked["labels"]
 
 
 def test_missing_bake_has_actionable_error(clean, tmp_path):

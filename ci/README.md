@@ -5,7 +5,7 @@
 The [Jenkinsfile](./Jenkinsfile) is a declarative pipeline of four stages, delegating most logic to the `finn_ci` Python package.
 
 1. **Validate**: computes the sharding plan once, prepares a timing snapshot from historical records, checks executor budget, and prunes the shared trees.
-2. **Build Docker Image**: builds the FINN image with `python3 -m finn_ci image build` (`docker buildx bake` under a content-addressed tag) and publishes it to NFS (if `FINN_CI_NFS_ROOT` is set) so the test shards load it instead of rebuilding. Every container then starts through `docker/run`.
+2. **Build Docker Image**: builds the FINN image with `python3 -m finn_ci image build` (`docker buildx bake`, or BuildKit's `docker build` without Buildx, under a content-addressed tag) and publishes it to NFS (if `FINN_CI_NFS_ROOT` is set) so the test shards load it instead of rebuilding. Every container then starts through `docker/run`.
 3. **Run Tests**: fans out one parallel branch per shard. Each branch runs `python -m pytest -m <marker> --num-shards N --shard-id i` inside the container and stashes results/artifacts.
 4. **Check Stage Results** unstashes every shard's reports, aggregates one board zip per `(hwTestType, board)`, and refreshes the persistent timing master file.
 
@@ -295,7 +295,14 @@ These are the other env vars a job DSL typically sets for a build-pipeline job, 
 | `FINN_BUILD_DIR`       | The build directory root for `Jenkinsfile_Brevitas` (the build pipeline sets one per shard).                                                       |
 | `NUM_DEFAULT_WORKERS`  | Default xdist worker count for ad-hoc runs. Per-shard worker counts come from `STAGES`, not this.                                                  |
 
-`FINN_XILINX_PATH`, `FINN_XILINX_VERSION`, `FINN_LICENSE_HOST`/`PORT`/`VENDOR_PORT`, `FINN_XRT_PATH`, `FINN_HOST_BUILD_DIR` and `FINN_DOCKER_EXTRA` are no longer read; the build pipeline stops with an error when `FINN_DOCKER_EXTRA` is set, so its flags are not lost silently. Write them as a Compose file:
+A job configured for upstream's `run-docker.sh` runs unchanged; `docker/run` reads its variables:
+
+| Env var               | What it sets                                                                                                                                                  |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `FINN_XILINX_PATH`, `FINN_XILINX_VERSION` | The install root and release, in place of `XILINX_VIVADO`, which wins when set. `docker/run` mounts the root read-only and the container sources `settings64.sh` from `<path>/<version>/Vivado` or `<path>/Vivado/<version>`; it stops at start when neither has one. |
+| `FINN_DOCKER_EXTRA`   | Extra `docker run` arguments (bind mounts, licence, network, and any `-e` vars the tool-dispatch layer needs), split as shell words. When Compose expresses every flag (`-v` with a host path, `-e`, `--env-file`, `--network` host/bridge/none, `--hostname`, `--device`, `--add-host`, `--cap-add`/`--cap-drop`, `--group-add`, `--security-opt`, `--dns`, `--tmpfs`, `--shm-size`, `--ipc`, `--pid`, `--label`, `--workdir`, `--user`, `--privileged`, `--init`, `--read-only`), they become a Compose override, written to the build directory, after FINN's files and before `COMPOSE_FILE`'s. Otherwise the container starts with plain `docker run` from the same rendered Compose definition, the arguments passed through as given: FINN's definition, then `FINN_DOCKER_EXTRA`, then what `COMPOSE_FILE`'s files add (the pipeline's hostname and caches), so the pipeline's come last, as upstream appended them. Validate prints which, and why, naming flags but never values (`docker/run --explain-extra`). |
+
+`FINN_LICENSE_HOST`/`PORT`/`VENDOR_PORT`, `FINN_XRT_PATH` and `FINN_HOST_BUILD_DIR` are no longer read. A new job can write its additions as a Compose file instead of `FINN_DOCKER_EXTRA`:
 
 ```yaml
 services:
@@ -306,7 +313,7 @@ services:
       LSF_ENVDIR: /site/lsf/conf
 ```
 
-A site that offloads the heavy Xilinx tools to a compute farm (see "Running tools on LSF") needs no pipeline changes. The tool wrapper and its configuration ride into the container through such a Compose file, and the only variable FINN itself reads is the shim-directory override below, which `docker/run` mounts:
+A site that offloads the heavy Xilinx tools to a compute farm (see "Running tools on LSF") needs no pipeline changes. The tool wrapper and its configuration ride into the container through `FINN_DOCKER_EXTRA` or such a Compose file, and the only variable FINN itself reads is the shim-directory override below, which `docker/run` mounts:
 
 | Env var                  | What it sets                                                                                                                                        |
 | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -328,7 +335,9 @@ the hash covering the image inputs listed in
 resource declarations), the archives the selected runtime manifests supply,
 `FINN_RUNTIMES` and `UBUNTU_TAG`; FINN's own sources are not inputs, since containers
 install the mounted checkout. `image build` runs `docker buildx bake finn` under that
-tag (`--if-missing` reuses an image already there), and `image build` and `image load`
+tag, or on an agent without Docker Buildx BuildKit's `docker build` of the same target,
+tag and build args (Docker 18.09 to 22.x; Docker 23 needs Buildx for BuildKit)
+(`--if-missing` reuses an image already there), and `image build` and `image load`
 print the image ID, which every container runs as `FINN_IMAGE` with
 `docker/run --no-build`. Without `FINN_CI_NFS_ROOT`, an agent builds the image when it
 lacks it.

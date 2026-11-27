@@ -3,8 +3,8 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""FINN's CI image: a content-addressed tag, a Bake build under it, and
-transport over shared storage.
+"""FINN's CI image: a content-addressed tag, a Bake build under it (BuildKit's
+`docker build` where Buildx is missing), and transport over shared storage.
 
 The tag hashes the files the image is built from (INPUTS), the archives the
 selected runtime manifests supply, FINN_RUNTIMES and UBUNTU_TAG. FINN's own
@@ -181,8 +181,48 @@ def image_id(reference):
     return inspected["Id"]
 
 
+def has_buildx():
+    try:
+        found = subprocess.run(["docker", "buildx", "version"], capture_output=True)
+    except FileNotFoundError:
+        return False
+    return found.returncode == 0
+
+
+def bake_default(name, root=REPO):
+    """A variable's default in docker-bake.hcl, which holds the build's defaults."""
+    text = (Path(root) / "docker-bake.hcl").read_text()
+    found = re.search(r'variable "%s" \{ default = "([^"]*)" \}' % re.escape(name), text)
+    if found is None:
+        raise ImageError("docker-bake.hcl declares no default for " + name)
+    return found.group(1)
+
+
+# docker-bake.hcl's `finn` target for `docker build` (a test holds the two together).
+BUILD_LABELS = {
+    "org.opencontainers.image.title": "FINN",
+    "org.opencontainers.image.source": "https://github.com/Xilinx/finn",
+}
+
+
+def docker_build_argv(reference, runtimes, root=REPO):
+    """BuildKit's `docker build` of Bake's `finn` target: same tag, build args, labels."""
+    argv = ["docker", "build", "-f", "docker/Dockerfile", "--target", "finn"]
+    argv += ["--platform", "linux/amd64", "--tag", reference]
+    for name, value in (
+        ("UBUNTU_TAG", os.environ.get("UBUNTU_TAG") or bake_default("UBUNTU_TAG", root)),
+        ("FINN_RUNTIMES", ",".join(normalize_runtimes(runtimes))),
+        ("FINN_VERSION", os.environ.get("FINN_VERSION") or bake_default("FINN_VERSION", root)),
+    ):
+        argv += ["--build-arg", "%s=%s" % (name, value)]
+    for name, value in BUILD_LABELS.items():
+        argv += ["--label", "%s=%s" % (name, value)]
+    return argv + ["."]
+
+
 def build(runtimes, if_missing=False):
-    """Build Bake's `finn` target under the image's tag; return its ID.
+    """Build Bake's `finn` target under the image's tag; return its ID. Without
+    Buildx, BuildKit's `docker build` builds the same target.
 
     With if_missing, an image already under the tag is used as it is.
     """
@@ -190,23 +230,35 @@ def build(runtimes, if_missing=False):
     reference = tag(runtimes)
     if if_missing and inspect(reference) is not None:
         return image_id(reference)
-    argv = ["docker", "buildx", "bake", "-f", "docker-bake.hcl", "--load"]
-    argv += ["--set", "finn.tags=" + reference, "finn"]
-    print("finn_ci image: building %s" % reference, file=sys.stderr)
+    buildx = has_buildx()
+    if buildx:
+        argv = ["docker", "buildx", "bake", "-f", "docker-bake.hcl", "--load"]
+        argv += ["--set", "finn.tags=" + reference, "finn"]
+    else:
+        argv = docker_build_argv(reference, runtimes)
+    print(
+        "finn_ci image: building %s with %s"
+        % (reference, "docker buildx bake" if buildx else "docker build (no Docker Buildx)"),
+        file=sys.stderr,
+    )
     try:
-        # Bake's output goes to stderr: stdout is the image ID.
+        # The build's output goes to stderr: stdout is the image ID.
         result = subprocess.run(
             argv,
             cwd=str(REPO),
-            env=dict(os.environ, FINN_RUNTIMES=",".join(runtimes)),
+            env=dict(os.environ, FINN_RUNTIMES=",".join(runtimes), DOCKER_BUILDKIT="1"),
             stdout=sys.stderr,
         )
     except FileNotFoundError:
         result = None
     if result is None or result.returncode:
+        if buildx:
+            raise ImageError("docker buildx bake finn failed; its output above says why.")
         raise ImageError(
-            "docker buildx bake finn failed. Docker Buildx with Bake is required; install "
-            "docker-buildx-plugin and check 'docker buildx bake --help'."
+            "docker build failed, and Docker Buildx is not installed. The Dockerfile needs "
+            "BuildKit: Docker 18.09 to 22.x provide it with DOCKER_BUILDKIT=1, which this "
+            "sets; from Docker 23, install docker-buildx-plugin (check 'docker buildx "
+            "version')."
         )
     return image_id(reference)
 
