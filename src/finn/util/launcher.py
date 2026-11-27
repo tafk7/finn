@@ -72,9 +72,7 @@ class ToolRun(subprocess.CompletedProcess):
 
 
 def resolve_executable(
-    name: StrPath,
-    cwd: Optional[StrPath] = None,
-    env: Optional[Mapping[str, str]] = None,
+    name: StrPath, cwd: Optional[StrPath] = None, env: Optional[Mapping[str, str]] = None
 ) -> Optional[str]:
     """Return the path of the executable that a child process started in ``cwd`` with
     the environment ``env`` runs for ``name``, as ``subprocess.Popen`` finds it. A name
@@ -499,14 +497,7 @@ class ToolFailed(RuntimeError):
         # Keep all fields across a multiprocessing pool (NodeLocalTransformation).
         return (
             type(self),
-            (
-                self.tool,
-                self.status,
-                self.transcript,
-                self.errors,
-                self.code,
-                self.command,
-            ),
+            (self.tool, self.status, self.transcript, self.errors, self.code, self.command),
         )
 
     @classmethod
@@ -645,19 +636,10 @@ def run_tool(
             transcript = os.path.splitext(os.fspath(replay))[0]
     try:
         result = run_process(
-            argv,
-            env=env,
-            cwd=cwd,
-            timeout=timeout,
-            check=False,
-            transcript=transcript,
+            argv, env=env, cwd=cwd, timeout=timeout, check=False, transcript=transcript
         )
     except OSError as exc:
-        if exc.filename == argv[0] and exc.errno in (
-            errno.ENOENT,
-            errno.EACCES,
-            errno.ENOEXEC,
-        ):
+        if exc.filename == argv[0] and exc.errno in (errno.ENOENT, errno.EACCES, errno.ENOEXEC):
             raise ToolUnavailable(os.path.basename(argv[0]), str(exc)) from exc
         raise
     if log_output:
