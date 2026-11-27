@@ -30,6 +30,7 @@ import fcntl
 import glob
 import numpy as np
 import os
+import re
 import warnings
 from abc import ABC, abstractmethod
 from qonnx.core.datatype import DataType
@@ -47,6 +48,21 @@ from finn.util.launcher import hls_root, run_tool
 from finn.util.paths import scratch
 
 finnxsi = xsi
+
+
+def hls_include_flags() -> str:
+    """The -I flags of every hls-include resource, FINN's and any a project or package
+    declares, for the IP generation script's double-quoted -cflags word."""
+    # Vitis HLS splits -cflags into compiler arguments, so a path with spaces is quoted
+    # as one argument first; then the whole string is escaped for the Tcl word.
+    flags = " ".join(_compiler_argument("-I" + p) for p in resources.paths("hls-include"))
+    return tcl_string(flags)[1:-1]
+
+
+def _compiler_argument(argument: str) -> str:
+    if re.fullmatch(r"[\w@%+=:,./-]+", argument):
+        return argument
+    return '"%s"' % re.sub(r'(["\\])', r"\\\1", argument)
 
 
 def _get_cnpy_object(hls_path: str) -> str:
@@ -184,10 +200,7 @@ class HLSBackend(ABC):
         template = templates.ipgentcl_template.replace(
             "$HLSLIB$", tcl_string(resources.path("hlslib"))
         )
-        # Every hls-include resource, FINN's and any a project or package declares;
-        # each path is escaped for the double-quoted -cflags word.
-        includes = " ".join("-I" + tcl_string(p)[1:-1] for p in resources.paths("hls-include"))
-        template = template.replace("$HLSINCLUDES$", includes)
+        template = template.replace("$HLSINCLUDES$", hls_include_flags())
 
         for key in self.code_gen_dict:
             # transform list into long string separated by '\n'

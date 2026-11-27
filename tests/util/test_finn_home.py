@@ -6,6 +6,7 @@ import pytest
 
 import contextlib
 import os
+import shlex
 import shutil
 import subprocess
 import threading
@@ -109,6 +110,26 @@ def test_resource_paths_reach_tcl_literally(tmp_path):
     result = subprocess.run(["tclsh", str(script)], capture_output=True, text=True, cwd=tmp_path)
     assert (result.returncode, result.stdout) == (0, path), result.stderr
     assert not (tmp_path / "pwned").exists()
+
+
+@pytest.mark.skipif(not shutil.which("tclsh"), reason="tclsh is not installed")
+def test_hls_include_paths_reach_the_compiler_whole(state, tmp_path, monkeypatch):
+    from finn.custom_op.fpgadataflow import templates  # noqa: PLC0415
+    from finn.custom_op.fpgadataflow.hlsbackend import (  # noqa: PLC0415
+        hls_include_flags,
+    )
+
+    includes = [tmp_path / "hlslib", tmp_path / 'custom hls $HOME [x] "q" \\']
+    for variable, include in zip(("FINN_RESOURCES_HLSLIB", "FINN_RESOURCES_CUSTOM_HLS"), includes):
+        include.mkdir()
+        monkeypatch.setenv(variable, str(include))
+    line = next(line for line in templates.ipgentcl_template.splitlines() if "-cflags" in line)
+    line = line.replace("$HLSINCLUDES$", hls_include_flags()).replace("$TOPFXN$", "top")
+    stub = "set config_hwsrcdir src\nproc add_files {args} {puts -nonewline [lindex $args end]}\n"
+    result = subprocess.run(["tclsh"], input=stub + line, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    # Split as a GNU command line is: quotes group an argument, backslashes escape.
+    assert shlex.split(result.stdout) == ["-std=c++14", *("-I" + str(i) for i in includes)]
 
 
 def test_xsi_key_changes_with_flags_and_pybind_version(state, monkeypatch):
