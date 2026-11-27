@@ -203,3 +203,10 @@ def test_git_directories_with_spaces_are_mounted_whole(tmp_path):
     run, git_dirs = worktree(tmp_path, tmp_path / "repository with spaces")
     _, argv = dry_run(tmp_path, run=run)
     assert [v for v in volumes(argv) if "/.git" in v] == [f"{d}:{d}" for d in git_dirs]
+
+
+def test_a_host_without_git_mounts_no_git_directories(tmp_path):
+    run, _ = worktree(tmp_path, tmp_path / "repository")
+    (tmp_path / "bin").mkdir()
+    _, argv = dry_run(tmp_path, run=run, env={"PATH": str(tmp_path / "bin")})
+    assert not [v for v in volumes(argv) if "/.git" in v]

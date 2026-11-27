@@ -165,6 +165,8 @@ def main(argv=None):
 
 def git_dirs_outside(repo):
     """The checkout's git directories that lie outside it (a worktree's), if git is at hand."""
+    if not shutil.which("git"):
+        return []
     found = subprocess.run(
         ["git", "rev-parse", "--absolute-git-dir", "--git-common-dir"],
         cwd=repo,
