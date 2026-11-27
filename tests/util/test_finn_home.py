@@ -4,13 +4,15 @@
 build directory (disposable), with per-cache overrides."""
 import pytest
 
+import contextlib
 import os
 import shutil
 import subprocess
+import threading
 from pathlib import Path
 
 from finn import xsi
-from finn.resources import _cli, prepare
+from finn.resources import _cli, _store, prepare
 from finn.util.basic import get_pynq_golden_dir, make_build_dir, tcl_string
 from finn.util.paths import home, scratch
 from finn.xsi import paths
@@ -195,3 +197,34 @@ def test_clean_removes_keyed_state_but_not_site_state(state, tmp_path, capsys, m
     assert _cli.main(["clean"]) == 0
     assert not entries["xsi"].exists() and not entries["golden"].exists()
     assert entries["unrelated"].is_dir() and (site / "vck190").is_dir()
+
+
+def test_concurrent_cleaners_remove_each_entry_once(state, capsys, monkeypatch):
+    entry = state / "resources/hlslib-0123456789abcdef"
+    entry.mkdir(parents=True)
+    # Both cleaners have found the entry before either takes its lock.
+    found = threading.Barrier(2)
+    locked = _store.locked
+
+    @contextlib.contextmanager
+    def after_both_found(root, name):
+        found.wait(timeout=10)
+        with locked(root, name) as held:
+            yield held
+
+    monkeypatch.setattr(_store, "locked", after_both_found)
+    outcomes = []
+
+    def clean():
+        try:
+            outcomes.append(_cli.main(["clean"]))
+        except Exception as error:
+            outcomes.append(error)
+
+    cleaners = [threading.Thread(target=clean) for _ in range(2)]
+    for cleaner in cleaners:
+        cleaner.start()
+    for cleaner in cleaners:
+        cleaner.join(30)
+    assert outcomes == [0, 0]
+    assert capsys.readouterr().out.count(f"removed {entry}\n") == 1

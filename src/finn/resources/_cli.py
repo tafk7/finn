@@ -134,6 +134,8 @@ def _clean(args):
             if not pattern.fullmatch(entry.name) or not entry.is_dir() or entry in keep:
                 continue
             with _store.locked(root, entry.name):
+                if not entry.is_dir():
+                    continue  # another cleaner removed it while this one waited
                 shutil.rmtree(entry)
             print(f"removed {entry}")
 
