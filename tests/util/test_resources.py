@@ -16,7 +16,7 @@ from hashlib import sha256
 from pathlib import Path
 
 from finn import resources
-from finn.resources import _declare, _store
+from finn.resources import _declare, _store, prepare
 
 pytestmark = pytest.mark.util
 
@@ -190,6 +190,23 @@ def test_caches_are_searched_in_order_and_the_system_cache_is_only_read(
         assert Path(resources.path("kv260-boards")).parent == system
     finally:
         system.chmod(0o755)
+
+
+def test_assembled_board_files_are_read_from_a_read_only_cache(boards, tmp_path, monkeypatch):
+    declared = resources.declarations()["kv260-boards"]
+    boards = _declare.Resource(**{**declared.__dict__, "kind": ("vivado-boards",)})
+    monkeypatch.setattr(resources, "_declared", {"kv260-boards": boards})
+    assembled = prepare.board_files()
+    assert (Path(assembled) / "kv260/board.xml").read_text() == "k\n"
+    cache = tmp_path / "finn-home/resources"
+    paths = [cache, *cache.rglob("*")]
+    for path in paths:
+        path.chmod(0o555 if path.is_dir() else 0o444)
+    try:
+        assert prepare.board_files() == assembled
+    finally:
+        for path in paths:
+            path.chmod(0o755 if path.is_dir() else 0o644)
 
 
 def test_offline_and_no_fetch_report_the_fetch_command(boards, monkeypatch):

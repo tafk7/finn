@@ -30,6 +30,9 @@ def board_files() -> str:
     sources = _board_sources()
     digest = _board_digest(sources)
     entry = board_entry(sources)
+    # A complete entry is final: reading it needs no lock, so a read-only cache serves.
+    if _store.complete(entry, digest):
+        return str(entry)
     with _store.locked(entry.parent, entry.name) as entry:
         if not _store.complete(entry, digest):
             with tempfile.TemporaryDirectory(dir=entry.parent, prefix=".board-files-") as work:
