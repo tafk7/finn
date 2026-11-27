@@ -41,7 +41,7 @@ def vivado(tmp_path, name="2025.2", settings="# settings\n"):
     return tool
 
 
-def test_defaults(state, tmp_path, monkeypatch):
+def test_state_lives_under_finn_home_by_default(state, tmp_path, monkeypatch):
     monkeypatch.delenv("FINN_HOME")
     monkeypatch.setenv("HOME", str(tmp_path))
     assert home() == tmp_path / ".finn"

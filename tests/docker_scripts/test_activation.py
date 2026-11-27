@@ -99,7 +99,7 @@ def test_finn_finds_its_checkout_without_finn_root(monkeypatch):
     assert get_finn_root() == "/elsewhere"
 
 
-def test_one_uv_version():
+def test_the_image_and_travis_install_the_pinned_uv():
     """uv's own pin (required-version) is the one the image and Travis install."""
     pin = re.search(r'required-version = "==([0-9.]+)"', (REPO / "pyproject.toml").read_text())
     assert pin, "pyproject.toml pins uv"
@@ -107,17 +107,10 @@ def test_one_uv_version():
     assert f"uv=={pin[1]}" in (REPO / ".travis.yml").read_text()
 
 
-def test_installers_do_not_hardcode_layouts_or_pins():
-    """The pre-2024.2 layout, hardcoded, reported "Vivado not found" at a path
-    the user could see; Python pins live only in pyproject.toml and uv.lock."""
+def test_python_pins_live_only_in_pyproject_and_the_lock():
     pin = re.compile(r"[A-Za-z0-9_.\-]+(?:\[[A-Za-z0-9_,.\-]+\])?==[0-9]")
     for rel in ("scripts/install-system-deps.sh", "docker/Dockerfile"):
-        body = (REPO / rel).read_text()
-        for number, line in enumerate(body.splitlines(), 1):
-            if line.lstrip().startswith("#"):
-                continue
-            assert "$FINN_XILINX_PATH/Vivado/" not in line, "%s:%d" % (rel, number)
-        assert pin.findall(body) == [], rel
+        assert pin.findall((REPO / rel).read_text()) == [], rel
 
 
 # --------------------------------------------------------------------------

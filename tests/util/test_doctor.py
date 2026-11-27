@@ -3,37 +3,15 @@
 
 import pytest
 
-import os
 import subprocess
 import sys
 from pathlib import Path
 
 from finn import doctor
 from finn.util import launcher, releases
+from finn_test_helpers import fake_amd_release, source_fake_release
 
 REPOSITORY = Path(__file__).resolve().parents[2]
-
-
-def install(root, release, tools=("vivado", "xelab", "vitis-run", "vitis_hls", "v++")):
-    """A fake AMD release in the 2025.1+ layout: <root>/<release>/{Vivado,Vitis}."""
-    vivado, vitis = root / release / "Vivado", root / release / "Vitis"
-    for directory in (vivado / "bin", vitis / "bin", vitis / "include"):
-        directory.mkdir(parents=True, exist_ok=True)
-    (vivado / "settings64.sh").write_text("")
-    (vitis / "include" / "hls_stream.h").write_text("")
-    for tool in tools:
-        home = vivado if tool in ("vivado", "xelab") else vitis
-        (home / "bin" / tool).write_text("#!/bin/sh\n")
-        (home / "bin" / tool).chmod(0o755)
-    return vivado, vitis
-
-
-def source(monkeypatch, vivado, vitis):
-    """What settings64.sh sets, as far as FINN reads it."""
-    monkeypatch.setenv("XILINX_VIVADO", str(vivado))
-    monkeypatch.setenv("XILINX_HLS", str(vitis))
-    monkeypatch.setenv("XILINX_VITIS", str(vitis))
-    monkeypatch.setenv("PATH", f"{vivado}/bin:{vitis}/bin:{os.environ['PATH']}")
 
 
 @pytest.fixture
@@ -55,7 +33,7 @@ def states(report, section=None):
 
 @pytest.mark.util
 def test_without_tools_the_software_flow_is_reported_and_nothing_fails(clean):
-    install(clean, "2025.2")
+    fake_amd_release(clean, "2025.2")
     report = doctor.diagnose()
     assert not report.failed()
     release = next(f for f in report.findings if f.label == "release")
@@ -68,9 +46,9 @@ def test_without_tools_the_software_flow_is_reported_and_nothing_fails(clean):
 
 @pytest.mark.util
 def test_a_sourced_release_is_reported_with_what_it_runs(clean, monkeypatch):
-    vivado, vitis = install(clean, "2025.2")
-    install(clean, "2024.2")
-    source(monkeypatch, vivado, vitis)
+    vivado, vitis = fake_amd_release(clean, "2025.2")
+    fake_amd_release(clean, "2024.2")
+    source_fake_release(monkeypatch, vivado, vitis)
     report = doctor.diagnose()
     assert not report.failed()
     assert report.release == (2025, 2)
@@ -85,17 +63,17 @@ def test_a_sourced_release_is_reported_with_what_it_runs(clean, monkeypatch):
 
 @pytest.mark.util
 def test_releases_before_2025_1_run_vitis_hls(clean, monkeypatch):
-    vivado, vitis = install(clean, "2024.2")
-    source(monkeypatch, vivado, vitis)
+    vivado, vitis = fake_amd_release(clean, "2024.2")
+    source_fake_release(monkeypatch, vivado, vitis)
     tools = states(doctor.diagnose(), "AMD tools")
     assert tools["vitis_hls"] == doctor.OK and "vitis-run" not in tools
 
 
 @pytest.mark.util
 def test_tools_of_two_releases_fail(clean, monkeypatch):
-    vivado, _ = install(clean, "2025.2")
-    _, vitis = install(clean, "2024.2")
-    source(monkeypatch, vivado, vitis)
+    vivado, _ = fake_amd_release(clean, "2025.2")
+    _, vitis = fake_amd_release(clean, "2024.2")
+    source_fake_release(monkeypatch, vivado, vitis)
     report = doctor.diagnose()
     assert report.failed()
     assert states(report)["release"] == doctor.FAIL
@@ -104,16 +82,16 @@ def test_tools_of_two_releases_fail(clean, monkeypatch):
 
 @pytest.mark.util
 def test_missing_hls_headers_fail(clean, monkeypatch):
-    vivado, vitis = install(clean, "2025.2")
+    vivado, vitis = fake_amd_release(clean, "2025.2")
     (vitis / "include" / "hls_stream.h").unlink()
-    source(monkeypatch, vivado, vitis)
+    source_fake_release(monkeypatch, vivado, vitis)
     assert states(doctor.diagnose())["HLS headers"] == doctor.FAIL
 
 
 @pytest.mark.util
 def test_the_release_table_is_printed_for_the_release_in_use(clean, monkeypatch):
-    vivado, vitis = install(clean, "2026.2")
-    source(monkeypatch, vivado, vitis)
+    vivado, vitis = fake_amd_release(clean, "2026.2")
+    source_fake_release(monkeypatch, vivado, vitis)
     report = doctor.diagnose()
     notes = [f for f in report.findings if f.section == "Known differences of release 2026.2"]
     assert len(notes) == len(releases.notes_for((2026, 2)))

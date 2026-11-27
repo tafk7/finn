@@ -41,7 +41,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.general import GiveUniqueNodeNames
 from qonnx.util.basic import gen_finn_dt_tensor, qonnx_make_model
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from finn.core.onnx_exec import execute_onnx
 from finn.core.onnx_exec import execute_parent as execute_parent_model
@@ -65,8 +65,38 @@ from finn.util.basic import (
     vitis_part_map,
 )
 
-if TYPE_CHECKING:  # Pillow comes with finn[brevitas]
-    pass
+# The AMD tools a fake release provides by default.
+AMD_TOOL_STUBS = ("vivado", "xelab", "vitis-run", "vitis_hls", "v++")
+
+
+def fake_amd_release(root, release, layout="new", tools=AMD_TOOL_STUBS):
+    """A stub AMD release under ``root``: settings64.sh, the HLS headers and an executable
+    stub for each of ``tools``, in the 2025.1+ layout ``<root>/<release>/{Vivado,Vitis}``
+    or, with ``layout="old"``, the earlier ``<root>/{Vivado,Vitis}/<release>``.
+    Returns its (XILINX_VIVADO, XILINX_VITIS)."""
+    if layout == "new":
+        vivado, vitis = root / release / "Vivado", root / release / "Vitis"
+    else:
+        vivado, vitis = root / "Vivado" / release, root / "Vitis" / release
+    for directory in (vivado / "bin", vitis / "bin", vitis / "include"):
+        directory.mkdir(parents=True)
+    (vivado / "settings64.sh").write_text("")
+    (vitis / "include" / "hls_stream.h").write_text("")
+    for tool in tools:
+        stub = (vivado if tool in ("vivado", "xelab") else vitis) / "bin" / tool
+        stub.write_text("#!/bin/sh\n")
+        stub.chmod(0o755)
+    return vivado, vitis
+
+
+def source_fake_release(monkeypatch, vivado, vitis):
+    """What a release's settings64.sh sets, as far as FINN reads it."""
+    monkeypatch.setenv("XILINX_VIVADO", str(vivado))
+    monkeypatch.setenv("XILINX_HLS", str(vitis))
+    monkeypatch.setenv("XILINX_VITIS", str(vitis))
+    monkeypatch.setenv(
+        "PATH", os.pathsep.join([f"{vivado}/bin", f"{vitis}/bin", os.environ["PATH"]])
+    )
 
 
 def soft_verify_topk(invec: NDArray[Any], idxvec: NDArray[Any], k: int) -> bool:

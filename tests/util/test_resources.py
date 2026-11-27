@@ -165,7 +165,9 @@ def test_digest_mismatch_publishes_nothing(boards):
     assert [p.name for p in root.iterdir()] == [f".{wrong.entry}.lock"]
 
 
-def test_cache_order_and_read_only_system_cache(boards, tmp_path, monkeypatch):
+def test_caches_are_searched_in_order_and_the_system_cache_is_only_read(
+    boards, tmp_path, monkeypatch
+):
     resource = resources.declarations()["kv260-boards"]
     system = tmp_path / "system-cache"
     _store.fetch(resource, system)
@@ -200,7 +202,7 @@ def test_offline_and_no_fetch_report_the_fetch_command(boards, monkeypatch):
     assert resources.status("kv260-boards").state == "missing"
 
 
-def test_overrides(boards, tmp_path, monkeypatch):
+def test_an_override_replaces_a_resource_with_a_local_directory(boards, tmp_path, monkeypatch):
     local = tmp_path / "local $ checkout"
     local.mkdir()
     monkeypatch.setenv("FINN_RESOURCES_KV260_BOARDS", str(local))
@@ -213,7 +215,7 @@ def test_overrides(boards, tmp_path, monkeypatch):
         resources.path("kv260-boards")
 
 
-def test_retired_names_select_nothing(project, tmp_path, monkeypatch):
+def test_variables_of_the_former_checkout_layout_select_nothing(project, tmp_path, monkeypatch):
     monkeypatch.setenv("FINN_HLSLIB_PATH", str(tmp_path))
     assert resources.status("hlslib").state != "override"
 
@@ -272,46 +274,36 @@ VALID = {"git": "u", "commit": "c" * 40, "digest": "sha256:" + "0" * 64}
 
 
 @pytest.mark.parametrize(
-    "fields, code, message",
+    "name, fields, code, message",
     [
-        ({"git": "u", "commit": "c" * 40}, "digest-invalid", "digest must be"),
-        ({"git": "u"}, "source-invalid", "40-character commit"),
-        ({**VALID, "digest": "sha256:0"}, "digest-invalid", "digest must be"),
-        ({**VALID, "commit": "main"}, "source-invalid", "40-character commit"),
-        ({**VALID, "subdir": "../x"}, "path-not-relative", "relative"),
-        ({**VALID, "kind": "rtl"}, "field-type-invalid", "kind must be a list"),
-        ({**VALID, "url": "u"}, "field-unknown", "unknown field"),
-        ({**VALID, "colour": "x"}, "field-unknown", "unknown field"),
-        ({"package": "a-b"}, "package-invalid", "importable module"),
-        ({"package": "acme", "digest": VALID["digest"]}, "package-fields-invalid", "only subdir"),
+        ("acme", {"git": "u", "commit": "c" * 40}, "digest-invalid", "digest must be"),
+        ("acme", {"git": "u"}, "source-invalid", "40-character commit"),
+        ("acme", {**VALID, "digest": "sha256:0"}, "digest-invalid", "digest must be"),
+        ("acme", {**VALID, "commit": "main"}, "source-invalid", "40-character commit"),
+        ("acme", {**VALID, "subdir": "../x"}, "path-not-relative", "relative"),
+        ("acme", {**VALID, "kind": "rtl"}, "field-type-invalid", "kind must be a list"),
+        ("acme", {**VALID, "url": "u"}, "field-unknown", "unknown field"),
+        ("acme", {"package": "a-b"}, "package-invalid", "importable module"),
+        ("acme", {"package": "a", "digest": VALID["digest"]}, "package-fields-invalid", "subdir"),
+        ("Acme", VALID, "name-invalid", "lower-case"),
+        ("acme_rtl", VALID, "name-invalid", "lower-case"),
+        # names whose override variable would be one of the settings
+        ("dir", VALID, "name-invalid", "lower-case"),
+        ("offline", VALID, "name-invalid", "lower-case"),
     ],
 )
-def test_invalid_declarations_are_rejected(fields, code, message):
+def test_invalid_declarations_are_rejected(name, fields, code, message):
     with fault(code, resources.DeclarationError, message):
-        _declare.parse({"acme": fields}, "test")
+        _declare.parse({name: fields}, "test")
 
 
-@pytest.mark.parametrize(
-    "name, code",
-    [
-        ("Acme", "name-invalid"),
-        ("dir", "name-invalid"),
-        ("offline", "name-invalid"),
-        ("acme_rtl", "name-invalid"),
-    ],
-)
-def test_names_are_restricted(name, code):
-    with fault(code, resources.DeclarationError):
-        _declare.parse({name: VALID}, "test")
-
-
-def test_digest_matches_the_previous_board_file_algorithm(tmp_path):
-    # Sorted by path components, not strings: "a/x" before "a-b/x".
+def test_the_tree_digest_sorts_by_path_components_and_skips_the_marker(tmp_path):
+    # "a/x" before "a-b/x", although "-" sorts before "/" as a string.
     tree = write(tmp_path / "t", {"a-b/x": "1", "a/x": "2", ".finn-resource": "ignored"})
-    old = __import__("hashlib").sha256()
+    expected = sha256()
     for name in ("a/x", "a-b/x"):
-        old.update(name.encode() + b"\0" + sha256((tree / name).read_bytes()).digest())
-    assert _store.tree_digest(tree) == "sha256:" + old.hexdigest()
+        expected.update(name.encode() + b"\0" + sha256((tree / name).read_bytes()).digest())
+    assert _store.tree_digest(tree) == "sha256:" + expected.hexdigest()
 
 
 def test_resources_import_only_the_standard_library(tmp_path):

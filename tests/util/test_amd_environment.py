@@ -19,6 +19,7 @@ from finn.util.launcher import (
     setup_hint,
     xilinx_tool,
 )
+from finn_test_helpers import fake_amd_release, source_fake_release
 
 pytestmark = pytest.mark.util
 
@@ -37,28 +38,6 @@ def bare(monkeypatch, tmp_path):
     xilinx_tool.cache_clear()
 
 
-def release(root, version, new_layout=True):
-    """A stub AMD release under root: settings64.sh, bin/vivado, bin/xelab, HLS headers."""
-    vivado = root / version / "Vivado" if new_layout else root / "Vivado" / version
-    vitis = root / version / "Vitis" if new_layout else root / "Vitis" / version
-    for directory in (vivado / "bin", vitis / "bin", vitis / "include"):
-        directory.mkdir(parents=True)
-    (vivado / "settings64.sh").write_text("")
-    (vitis / "include" / "hls_stream.h").write_text("")
-    for tool in (vivado / "bin" / "vivado", vivado / "bin" / "xelab", vitis / "bin" / "v++"):
-        tool.write_text("#!/bin/sh\n")
-        tool.chmod(0o755)
-    return vivado, vitis
-
-
-def source(monkeypatch, vivado, vitis):
-    """What settings64.sh does for a release."""
-    monkeypatch.setenv("XILINX_VIVADO", str(vivado))
-    monkeypatch.setenv("XILINX_HLS", str(vitis))
-    monkeypatch.setenv("XILINX_VITIS", str(vitis))
-    monkeypatch.setenv("PATH", os.pathsep.join([str(vitis / "bin"), str(vivado / "bin")]))
-
-
 @pytest.mark.parametrize(
     "path, expected",
     [
@@ -74,9 +53,9 @@ def test_release_of(path, expected):
 
 
 def test_installed_releases_are_found_in_both_layouts_newest_first(tmp_path):
-    release(tmp_path / "new", "2025.2")
-    release(tmp_path / "new", "2025.1")
-    release(tmp_path / "old", "2024.2", new_layout=False)
+    fake_amd_release(tmp_path / "new", "2025.2")
+    fake_amd_release(tmp_path / "new", "2025.1")
+    fake_amd_release(tmp_path / "old", "2024.2", layout="old")
     found = installed_releases([str(tmp_path / "new"), str(tmp_path / "old"), "/no/such/root"])
     assert [r for r, _ in found] == [(2025, 2), (2025, 1), (2024, 2)]
     assert found[0][1] == str(tmp_path / "new/2025.2/Vivado/settings64.sh")
@@ -84,8 +63,8 @@ def test_installed_releases_are_found_in_both_layouts_newest_first(tmp_path):
 
 
 def test_the_hint_names_the_newest_release_and_never_uses_it(bare, monkeypatch, tmp_path):
-    release(tmp_path / "root", "2024.2")
-    release(tmp_path / "root", "2025.2")
+    fake_amd_release(tmp_path / "root", "2024.2")
+    fake_amd_release(tmp_path / "root", "2025.2")
     monkeypatch.setattr(launcher, "INSTALL_ROOTS", (str(tmp_path / "root"),))
     script = tmp_path / "root/2025.2/Vivado/settings64.sh"
     assert setup_hint() == f"To use Vivado 2025.2: source {script} (also installed: 2024.2)"
@@ -100,33 +79,33 @@ def test_without_installs_the_hint_says_how_to_get_them(bare):
 
 
 def test_a_sourced_release_is_used(bare, monkeypatch, tmp_path):
-    vivado, vitis = release(tmp_path, "2025.2")
-    source(monkeypatch, vivado, vitis)
+    vivado, vitis = fake_amd_release(tmp_path, "2025.2")
+    source_fake_release(monkeypatch, vivado, vitis)
     assert expected_release() == (2025, 2)
     assert xilinx_tool("vivado") == str(vivado / "bin" / "vivado")
     assert hls_root() == str(vitis)
 
 
 def test_variables_from_two_releases_are_refused(bare, monkeypatch, tmp_path):
-    vivado, _ = release(tmp_path, "2025.2")
-    _, vitis = release(tmp_path, "2024.2", new_layout=False)
-    source(monkeypatch, vivado, vitis)
+    vivado, _ = fake_amd_release(tmp_path, "2025.2")
+    _, vitis = fake_amd_release(tmp_path, "2024.2", layout="old")
+    source_fake_release(monkeypatch, vivado, vitis)
     with pytest.raises(ToolchainMismatch, match="different releases"):
         xilinx_tool("vivado")
 
 
 def test_a_tool_from_another_release_on_path_is_refused(bare, monkeypatch, tmp_path):
-    vivado, vitis = release(tmp_path, "2025.2")
-    other, _ = release(tmp_path / "other", "2024.2")
-    source(monkeypatch, vivado, vitis)
+    vivado, vitis = fake_amd_release(tmp_path, "2025.2")
+    other, _ = fake_amd_release(tmp_path / "other", "2024.2")
+    source_fake_release(monkeypatch, vivado, vitis)
     monkeypatch.setenv("PATH", os.pathsep.join([str(other / "bin"), os.environ["PATH"]]))
     with pytest.raises(ToolchainMismatch, match="release 2024.2.*release 2025.2"):
         xilinx_tool("vivado")
 
 
 def test_a_wrapper_without_a_release_is_accepted(bare, monkeypatch, tmp_path):
-    vivado, vitis = release(tmp_path, "2025.2")
-    source(monkeypatch, vivado, vitis)
+    vivado, vitis = fake_amd_release(tmp_path, "2025.2")
+    source_fake_release(monkeypatch, vivado, vitis)
     shims = tmp_path / "shims"
     shims.mkdir()
     (shims / "vivado").write_text("#!/bin/sh\n")
@@ -136,7 +115,7 @@ def test_a_wrapper_without_a_release_is_accepted(bare, monkeypatch, tmp_path):
 
 
 def test_hls_headers_decide_between_xilinx_hls_and_xilinx_vitis(bare, monkeypatch, tmp_path):
-    _, vitis = release(tmp_path, "2024.2", new_layout=False)
+    _, vitis = fake_amd_release(tmp_path, "2024.2", layout="old")
     hls_without_headers = tmp_path / "Vitis_HLS" / "2024.2"
     hls_without_headers.mkdir(parents=True)
     monkeypatch.setenv("XILINX_HLS", str(hls_without_headers))
