@@ -316,6 +316,46 @@ def test_stitched_rtlsim_reads_each_listed_source_whole(state, tmp_path, monkeyp
     assert compiled.value.args[0] == sources
 
 
+def test_portable_rtl_keeps_the_rtllib_layout_wherever_rtllib_lives(state, tmp_path, monkeypatch):
+    from qonnx.core.modelwrapper import ModelWrapper  # noqa: PLC0415
+    from qonnx.util.basic import qonnx_make_model  # noqa: PLC0415
+
+    from finn.transformation.fpgadataflow.export_portable_rtl import (  # noqa: PLC0415
+        ExportPortableRTL,
+    )
+
+    # As in a wheel, the directory is not named finn-rtllib; it is selected through a link.
+    rtllib = tmp_path / "site packages/finn/_sources/rtllib"
+    shutil.copytree(resources.path("rtllib"), rtllib)
+    (tmp_path / "selected").symlink_to(rtllib)
+    monkeypatch.setenv("FINN_RESOURCES_RTLLIB", str(tmp_path / "selected"))
+    project = tmp_path / "stitched"
+    project.mkdir()
+    (project / "top_wrapper.v").write_text("module top_wrapper; endmodule\n")
+    sources = [
+        tmp_path / "selected/fifo/hdl/fifo.sv",
+        rtllib / "memstream/hdl/memstream.sv",
+        project / "top_wrapper.v",
+    ]
+    (project / "all_verilog_srcs.txt").write_text("".join(f"{s}\n" for s in sources))
+    model = ModelWrapper(qonnx_make_model(onnx.helper.make_graph([], "empty", [], [])))
+    model.set_metadata_prop("vivado_stitch_proj", str(project))
+
+    export = tmp_path / "portable"
+    model.transform(ExportPortableRTL(str(export)))
+    exported = sorted(
+        str(f.relative_to(export)) for f in (export / "rtl").rglob("*") if f.is_file()
+    )
+    assert exported == [
+        "rtl/rtllib/fifo/hdl/fifo.sv",
+        "rtl/rtllib/memstream/hdl/memstream.sv",
+        "rtl/src/top_wrapper.v",
+    ]
+    filelist = (export / "filelist.f").read_text()
+    library, design = filelist.split("// Design files")
+    assert "rtl/rtllib/fifo/hdl/fifo.sv" in library and "rtl/src/top_wrapper.v" in design
+
+
 def test_xsi_key_changes_with_flags_and_pybind_version(state, monkeypatch):
     from finn.xsi import _build_config  # noqa: PLC0415
 

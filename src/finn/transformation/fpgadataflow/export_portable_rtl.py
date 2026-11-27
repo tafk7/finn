@@ -8,6 +8,7 @@ import shutil
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.base import Transformation
 
+from finn import resources
 from finn.util.basic import verilog_sources
 from finn.util.fpgadataflow import is_hls_node, is_rtl_node
 
@@ -64,6 +65,9 @@ class ExportPortableRTL(Transformation):
         ), f"all_verilog_srcs.txt not found in {vivado_stitch_proj}"
 
         verilog_files = verilog_sources(vivado_stitch_proj)
+        # finn-rtllib may live anywhere (a checkout, a wheel, an override): its files
+        # are known by their location, not by the directory's name.
+        rtllib_root = os.path.realpath(resources.path("rtllib"))
 
         for src_file in verilog_files:
             if not os.path.isfile(src_file):
@@ -74,10 +78,11 @@ class ExportPortableRTL(Transformation):
 
             basename = os.path.basename(src_file)
 
-            if "finn-rtllib" in src_file:
+            real_file = os.path.realpath(src_file)
+            if os.path.commonpath([real_file, rtllib_root]) == rtllib_root:
                 # Copy finn-rtllib files (preserving subdirectory structure)
                 if src_file not in rtllib_files_copied:
-                    rtllib_rel = src_file.split("finn-rtllib/")[1]
+                    rtllib_rel = os.path.relpath(real_file, rtllib_root)
                     rtllib_subdir = os.path.dirname(rtllib_rel)
                     if rtllib_subdir:
                         dest_subdir = os.path.join(rtllib_dir, rtllib_subdir)
