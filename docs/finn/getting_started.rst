@@ -79,7 +79,7 @@ Vitis/Alveo builds additionally select the XRT userspace runtime with
 
 Launch Jupyter notebooks
 ************************
-Serve the upstream notebooks, with token authentication::
+Serve FINN's notebooks, with token authentication::
 
   ./docker/run --fpga --notebook
 
@@ -96,7 +96,7 @@ release's ``settings64.sh``), ``XILINXD_LICENSE_FILE`` and ``LM_LICENSE_FILE``
 installation layouts work. Software runs need no tools.
 
 * ``FINN_BUILD_DIR`` selects the disposable build directory (default ``/tmp/finn_build_<uid>``).
-* ``FINN_HOME`` selects persistent state such as resources and XSI builds (default ``~/.finn``); ``FINN_RESOURCES_DIR``, ``FINN_XSI_PATH`` and ``FINN_GOLDEN_DIR`` move parts of it elsewhere.
+* ``FINN_HOME`` selects persistent state such as resources and XSim binding builds (default ``~/.finn``); ``FINN_RESOURCES_DIR``, ``FINN_XSI_PATH`` and ``FINN_GOLDEN_DIR`` move parts of it elsewhere.
 * ``-e NAME[=VALUE]`` passes further variables (``NUM_DEFAULT_WORKERS``, ``FINN_XELAB_MT``), ``-v SOURCE:TARGET`` further mounts; ``COMPOSE_FILE`` adds your own Compose files.
 * The checkout's ``ssh_keys`` directory, where it exists, is mounted read-only as the container's ``~/.ssh``.
 * ``finn resources golden`` builds the optional VCK190 golden reference into ``FINN_HOME``.
@@ -247,7 +247,7 @@ Retired boards (Pynq-Z1/Pynq-Z2)
 ********************************
 The Zynq-7000 based Pynq-Z1 and Pynq-Z2 boards were retired from official support with the move to Vivado 2024.2. The AUP-ZU3 (a Zynq UltraScale+ board from the AMD University Program) is the recommended supported replacement for academic use.
 
-These boards are no longer officially supported and have been removed from our CI and testing, so we make no guarantees about them. That said, the build flow itself is unchanged and Vivado 2024.2 still supports the ``xc7z020`` part, so you can re-enable them at your own decision by removing them from the ``retired_pynq_boards`` set in ``src/finn/util/basic.py``. The board entries in ``pynq_part_map``, ``pynq_native_port_width`` and ``util/platforms.py`` are kept in place. Supply the retired board files in a local assembled tree selected by ``FINN_BOARD_FILES_PATH``, or add a pinned ``vivado-boards`` resource declaration to your project's ``pyproject.toml``.
+These boards are no longer officially supported and have been removed from our CI and testing, so we make no guarantees about them. That said, the build flow itself is unchanged and Vivado 2024.2 still supports the ``xc7z020`` part, so you can re-enable them at your own decision by removing them from the ``retired_pynq_boards`` set in ``src/finn/util/basic.py``. The board entries in ``pynq_part_map``, ``pynq_native_port_width`` and ``util/platforms.py`` are kept in place. Supply the retired board files in a local assembled tree selected by ``FINN_BOARD_FILES_PATH``, or declare them as a pinned ``vivado-boards`` resource in a package's ``resources.toml`` (see "Your own resources" in ``docker/README.md``).
 
 PYNQ board first-time setup
 ****************************

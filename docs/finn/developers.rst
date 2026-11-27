@@ -77,7 +77,7 @@ Board kernel drivers remain host responsibilities.
 External source trees live in verified resource caches, declared in
 ``src/finn/resources.toml``. Use ``scripts/update-resource.py NAME --ref REF`` to
 change a pin and its digest; use ``FINN_RESOURCES_<NAME>`` for local development.
-Persistent, content-keyed state (resources, XSI builds, golden references) lives
+Persistent, content-keyed state (resources, XSim binding builds, golden references) lives
 in ``FINN_HOME`` (default ``~/.finn``); build output lives in the disposable
 ``FINN_BUILD_DIR`` (default ``/tmp/finn_build_<uid>``). See ``docker/README.md``
 and ``ci/README.md`` for the full variable list, migration and validation contracts.

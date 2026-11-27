@@ -315,13 +315,12 @@ A site that offloads the heavy Xilinx tools to a compute farm (see "Running tool
 The wrapper's own variables are deployment-specific.
 
 
-## Environment migration and image transport
+## The CI image
 
 Compiler test shards run `docker/run --fpga` (as `ci/scripts/run.sh` does) with
-`FINN_RUNTIMES` defaulting to `xrt`, retaining the previous compiler image's full
-capability. Software report aggregation can run without a tool mount. The host's
-`finn_ci` CLI remains standard-library-only; board PYNQ/XRT profiles remain unchanged.
-All stage/shard/board matrices and hardware READY/fallback policies are retained.
+`FINN_RUNTIMES` defaulting to `xrt`. Software report aggregation runs without a tool
+mount. The host's `finn_ci` CLI uses only the standard library; the boards keep their
+own PYNQ/XRT environments.
 
 The image is CI's own: `python3 -m finn_ci image tag` names it `finn:ci-<hash>-xrt`,
 the hash covering the image inputs listed in
@@ -335,7 +334,7 @@ print the image ID, which every container runs as `FINN_IMAGE` with
 lacks it.
 
 The image build archives `image-metadata/*` in the Jenkins workspace even in
-local fallback mode. Shared publication retains
+local fallback mode. A shared publication is
 `${FINN_CI_NFS_ROOT}/docker_images/<jobKey>/<BUILD>/`:
 
 - `finn-docker-image.tar.gz` and `finn-docker-tag.txt` hold the image and its transport tag.
@@ -353,10 +352,9 @@ checksum on the way (one read of the archive). Loading tags the image with its
 installed, else with Python's gzip. Thus corrupt archive bytes fail when loading is
 necessary, while existing verified image bytes remain usable. Missing archives,
 invalid metadata or a publication of other inputs always fail the shard; there is no
-local fallback once an image is published. Publications by `docker/launcher.py`
-(schema 1) are rejected; do not deploy mixed producers and consumers. Source
-checkouts remain pinned by the pipeline separately from source-independent
-dependency images.
+local fallback once an image is published. A publication of another metadata
+schema is rejected, so producers and consumers deploy together. The pipeline pins
+the source checkout separately from the source-independent image.
 
 SIGTERM unwinds publication staging and stops its Docker save process. Image
 retention also removes `.finn-image-*` staging directories with no writes for
@@ -382,10 +380,9 @@ and records the effective distribution metadata in `brevitas-provenance/`.
 These artifacts, XML/HTML and coverage are archived even on failure. Do not nest
 another `uv run` inside that test command: it may restore the default environment.
 
-Before site cutover, validate the deployed Job DSL/required status checks, node
-labels, credentials, LSF wrappers, available tool versions and provisioned boards.
-Native setup bootstraps the pinned uv binary into `~/.cache/finn/` when needed; GitHub provisions it explicitly. The
-tracked Travis definition is retained and migrated as a standalone software job;
-its actual deployed status must be confirmed by the CI owner. Licensed tools,
-LSF cancellation and physical-board acceptance require the actual site; local
-software checks are not substitutes for those results.
+A site deploying this pipeline validates its Job DSL and required status checks,
+node labels, credentials, LSF wrappers, tool versions and boards. The native stage
+needs `pyproject.toml`'s uv on `PATH`; the GitHub workflows install it themselves.
+`.travis.yml` runs the software tests for deployments that use Travis. Licensed
+tools, LSF cancellation and physical boards need the actual site; local software
+checks do not stand in for them.

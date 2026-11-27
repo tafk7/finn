@@ -49,6 +49,8 @@ Models are fetched by `models/download_models.sh`.
 | `VERIFICATION_EN` | `0` | When truthy (`1`/`true`/`yes`/`on`), run the numeric cppsim/rtlsim verification steps; a failed step fails the test. Off by default for faster benchmark runs. |
 | `VERIFICATION_IO` | in-repo `verification_io/` | Override the directory holding the golden `*.npy` I/O. |
 
+In the container, pass them on: `docker/run --fpga -e VERIFICATION_EN=1 -- pytest ...`.
+
 Some multi-board models additionally scope verification to a single baseline board
 (`AUP-ZU3_8GB`), so only the baseline build verifies even when `VERIFICATION_EN=1`.
 

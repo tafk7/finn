@@ -24,10 +24,10 @@ finn doctor                  # what FINN finds, and what it can run here
 ```
 
 uv checks its own version against `pyproject.toml` (`required-version`) and
-picks Python 3.12 from `.python-version`. Resources are fetched, and the XSI
-binding is built for the sourced Vivado, the first time FINN needs them;
+picks Python 3.12 from `.python-version`. Resources are fetched, and the XSim
+binding (`finn_xsi`) is built for the sourced Vivado, the first time FINN needs them;
 `finn resources fetch --all` fetches every declared resource ahead of use
-offline, and `python -m finn.xsi.setup` prebuilds XSI. FINN finds its checkout
+offline, and `python -m finn.xsi.setup` prebuilds the binding. FINN finds its checkout
 from where it is installed; `FINN_ROOT` overrides it.
 
 FINN reads the AMD tools' own environment, as a release's `settings64.sh` or a
@@ -41,7 +41,7 @@ never uses it by itself.
 
 `finn doctor` reports, and changes nothing: the release in the environment and
 whether its tools agree, other installed releases, the compiler, Python headers,
-licence settings, the XSI binding, each resource's source, and what FINN can run
+licence settings, the XSim binding, each resource's source, and what FINN can run
 with what is set up. It also prints what FINN knows about the release in use that
 the installation does not show (`finn.util.releases`: a release's own behaviour and
 what FINN does about it). It exits 1 for a broken environment, such as tools of two
@@ -114,7 +114,7 @@ BuildKit's cache between builds; `slash` and `slashkit` name packages you supply
 | --- | --- | --- |
 | `FINN_HOME` | `~/.finn` | persistent, content-keyed state: everything below without its own variable |
 | `FINN_RESOURCES_DIR` | `$FINN_HOME/resources` | fetched resources and assembled board files |
-| `FINN_XSI_PATH` | `$FINN_HOME/xsi` | XSI builds, one per source, compiler, Python ABI and Vivado installation |
+| `FINN_XSI_PATH` | `$FINN_HOME/xsi` | XSim binding builds, one per source, compiler, Python ABI and Vivado installation |
 | `FINN_GOLDEN_DIR` | `$FINN_HOME/golden/<board>-<key>` | golden references; when set, a site directory holding `<board>/`, used as supplied |
 | (none) | `$FINN_HOME/identity/<uid>` | the container user's passwd/group files |
 | `FINN_BUILD_DIR` | `/tmp/finn_build_<uid>` | disposable build output; nothing in it is reused |
@@ -124,7 +124,7 @@ BuildKit's cache between builds; `slash` and `slashkit` name packages you supply
 
 Deleting `FINN_HOME` costs only rebuilds and downloads; deleting the build
 directory loses only build output. `finn resources clean` removes cached
-resources, XSI builds and golden references; `--unused` keeps those the current
+resources, XSim binding builds and golden references; `--unused` keeps those the current
 pins, installation and Vivado use. A site `FINN_GOLDEN_DIR` is never cleaned.
 FINN writes nothing into a checkout but the native `.venv` and the editable
 install's metadata.
@@ -132,7 +132,8 @@ install's metadata.
 ## Dependencies
 
 Use `uv add`, `uv lock --upgrade-package NAME` and `uv sync --locked` for Python
-updates. QONNX and Brevitas are pinned to upstream's Git selections. The groups
+updates. QONNX is pinned to a Git commit in `pyproject.toml`; Brevitas comes from
+PyPI. The groups
 `test`, `ci`, `notebooks`, `docs` and `dev` resolve together.
 
 PyTorch is the CPU build by default (the `cpu` group). FINN does not use CUDA;
@@ -211,7 +212,7 @@ The board repositories are assembled into the upstream flat layout in the
 resource cache. Locally built images contain the board sources, which may not
 be redistributed; the release target omits them.
 
-XSI builds are keyed by their sources, Python ABI, compiler, compile and link
+XSim binding builds are keyed by their sources, Python ABI, compiler, compile and link
 settings, pybind11 version and Vivado installation. `finn resources golden` builds
 the VCK190 golden reference from the pinned PYNQ sources with the selected
 Vivado; the pinned Tcl declares Vivado 2025.2.
