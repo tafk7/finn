@@ -29,8 +29,8 @@ subdir = "qnn-data"
 kind = ["hls-include"]
 redistributable = true
 git = "https://github.com/Xilinx/finn-hlslib.git"
-commit = "8706a00b1774c2ecc4fb705a194f39c714f92e6a"
-digest = "sha256:c43ac3e536ffad0cf101dbbf073ae7bf0d79ca62d2c965ff2adfddf62cf90bdb"
+commit = "99c906473060031c81cdad93b6c44e143fb80ccf"
+digest = "sha256:d9f61236deb3724847f6be566116670e6c147a0c40daa225e059573e9d8b84f3"
 
 # custom_hls: FINN's own HLS headers
 [resources.custom-hls]
