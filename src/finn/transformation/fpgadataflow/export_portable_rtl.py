@@ -8,6 +8,7 @@ import shutil
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.base import Transformation
 
+from finn.util.basic import verilog_sources
 from finn.util.fpgadataflow import is_hls_node, is_rtl_node
 
 
@@ -62,8 +63,7 @@ class ExportPortableRTL(Transformation):
             all_verilog_srcs_file
         ), f"all_verilog_srcs.txt not found in {vivado_stitch_proj}"
 
-        with open(all_verilog_srcs_file, "r") as f:
-            verilog_files = f.read().strip().split()
+        verilog_files = verilog_sources(vivado_stitch_proj)
 
         for src_file in verilog_files:
             if not os.path.isfile(src_file):

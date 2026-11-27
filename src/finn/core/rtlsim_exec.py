@@ -37,6 +37,7 @@ from finn.util.basic import (
     get_vivado_root,
     get_watchdog_timeout_cycles,
     make_build_dir,
+    verilog_sources,
 )
 from finn.util.data_packing import npy_to_rtlsim_input, rtlsim_output_to_npy
 from finn.util.launcher import run_tool
@@ -199,8 +200,7 @@ def rtlsim_exec_cppxsi(
     top_module_name = top_module_file_name.strip(".v")
     if (rtlsim_so is None) or (not os.path.isfile(rtlsim_so)):
         vivado_stitch_proj_dir = model.get_metadata_prop("vivado_stitch_proj")
-        with open(vivado_stitch_proj_dir + "/all_verilog_srcs.txt", "r") as f:
-            all_verilog_srcs = f.read().split()
+        all_verilog_srcs = verilog_sources(vivado_stitch_proj_dir)
         single_src_dir = make_build_dir("rtlsim_" + top_module_name + "_")
         debug = not (trace_file is None or trace_file == "")
         rtlsim_so = finnxsi.compile_sim_obj(
@@ -379,8 +379,7 @@ def rtlsim_exec_finnxsi(model, execution_context, pre_hook=None, post_hook=None)
     rtlsim_so = model.get_metadata_prop("rtlsim_so")
     if (rtlsim_so is None) or (not os.path.isfile(rtlsim_so)):
         vivado_stitch_proj_dir = model.get_metadata_prop("vivado_stitch_proj")
-        with open(vivado_stitch_proj_dir + "/all_verilog_srcs.txt", "r") as f:
-            all_verilog_srcs = f.read().split()
+        all_verilog_srcs = verilog_sources(vivado_stitch_proj_dir)
         top_module_file_name = file_to_basename(model.get_metadata_prop("wrapper_filename"))
         top_module_name = top_module_file_name.strip(".v")
         single_src_dir = make_build_dir("rtlsim_" + top_module_name + "_")

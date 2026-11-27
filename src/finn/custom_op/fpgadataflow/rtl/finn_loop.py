@@ -44,7 +44,7 @@ from finn.custom_op.fpgadataflow import templates
 from finn.custom_op.fpgadataflow.hwcustomop import HWCustomOp
 from finn.custom_op.fpgadataflow.rtlbackend import RTLBackend
 from finn.transformation.fpgadataflow.annotate_cycles import AnnotateCycles
-from finn.util.basic import make_build_dir, tcl_list, tcl_string
+from finn.util.basic import make_build_dir, tcl_list, tcl_string, verilog_sources
 from finn.util.create import adjacency_list
 from finn.util.data_packing import npy_to_rtlsim_input, rtlsim_output_to_npy
 from finn.util.launcher import run_tool
@@ -287,8 +287,7 @@ class FINNLoop(HWCustomOp, RTLBackend):
         for this node, sets the rtlsim_so attribute to its path."""
 
         vivado_stitch_proj_dir = self.get_nodeattr("code_gen_dir_ipgen")
-        with open(vivado_stitch_proj_dir + "/all_verilog_srcs.txt", "r") as f:
-            all_verilog_srcs = f.read().split()
+        all_verilog_srcs = verilog_sources(vivado_stitch_proj_dir)
         top_module_file_name = os.path.basename(os.path.realpath(self.get_nodeattr("ipgen_path")))
         top_module_name = top_module_file_name.strip(".v")
         single_src_dir = make_build_dir("rtlsim_" + top_module_name + "_")

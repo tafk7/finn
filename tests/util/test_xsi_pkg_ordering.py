@@ -6,6 +6,7 @@
 
 import pytest
 
+import shlex
 import sys
 
 from finn import resources
@@ -18,7 +19,7 @@ _XSI_ROOT = resources.path("finn-xsi")
 if _XSI_ROOT not in sys.path:
     sys.path.insert(0, _XSI_ROOT)
 
-from finn_xsi.srcutil import is_pkg_src, order_pkg_first  # noqa: E402
+from finn_xsi.srcutil import is_pkg_src, order_pkg_first, prj_text  # noqa: E402
 
 
 @pytest.mark.util
@@ -73,3 +74,21 @@ def test_order_pkg_first_floats_packages_and_is_stable():
 def test_order_pkg_first_preserves_list_with_no_packages():
     source_list = ["/path/to/top.sv", "/path/to/bar.v"]
     assert order_pkg_first(source_list) == source_list
+
+
+@pytest.mark.util
+def test_prj_names_sources_with_spaces_whole():
+    """xelab reads a .prj line as words; a double-quoted path is one word."""
+    lib = "/home/x/rtl lib"
+    prj = prj_text(
+        [f"{lib}/mvu/mvu_pkg.sv", f"{lib}/fifo/hdl/fifo.sv", f"{lib}/inc/defs.vh", "/b/top.v"],
+        glbl="/opt/Xilinx 2025/glbl.v",
+    )
+    assert [shlex.split(line) for line in prj.splitlines()] == [
+        ["verilog", "work", "/opt/Xilinx 2025/glbl.v"],
+        ["sv", "work", "--include", f"{lib}/inc", f"{lib}/mvu/mvu_pkg.sv"],
+        ["sv", "work", "--include", f"{lib}/inc", f"{lib}/fifo/hdl/fifo.sv"],
+        ["verilog", "work", "--include", f"{lib}/inc", "/b/top.v"],
+    ]
+    # Paths without whitespace are written as before.
+    assert prj_text(["/a/x.sv", "/a/y.vhd"]) == "sv work  /a/x.sv\nvhdl2008 work /a/y.vhd\n"

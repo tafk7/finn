@@ -35,3 +35,37 @@ def order_pkg_first(source_list):
     for src in source_list:
         (pkg_srcs if is_pkg_src(src) else other_srcs).append(src)
     return pkg_srcs + other_srcs
+
+
+def prj_word(path: str) -> str:
+    """A path as one word of an xelab .prj line: like Vivado's own .prj files, a
+    path with whitespace is double-quoted."""
+    return '"%s"' % path if any(c.isspace() for c in path) else path
+
+
+def prj_text(source_list, glbl=None) -> str:
+    """The rtlsim.prj that ``compile_sim_obj`` gives xelab for ``source_list``."""
+    lines = []
+    if glbl is not None:
+        lines.append(f"verilog work {prj_word(glbl)}")
+    # extract (unique, by using a set) verilog headers for inclusion
+    verilog_headers = {
+        os.path.dirname(x) for x in source_list if x.endswith(".vh") or x.endswith(".svh")
+    }
+    verilog_header_incl_str = " ".join(["--include " + prj_word(x) for x in verilog_headers])
+    # packages must come before the modules that import them
+    for src_line in order_pkg_first(source_list):
+        src = prj_word(src_line)
+        if src_line.endswith(".v"):
+            lines.append(f"verilog work {verilog_header_incl_str} {src}")
+        elif src_line.endswith(".vhd"):
+            # note that Verilog header incls are not added for VHDL
+            lines.append(f"vhdl2008 work {src}")
+        elif src_line.endswith(".sv"):
+            lines.append(f"sv work {verilog_header_incl_str} {src}")
+        elif src_line.endswith(".vh") or src_line.endswith(".svh"):
+            # skip adding Verilog headers directly (see verilog_header_incl_str)
+            continue
+        else:
+            raise Exception(f"Unknown extension for .prj file sources: {src_line}")
+    return "".join(line + "\n" for line in lines)

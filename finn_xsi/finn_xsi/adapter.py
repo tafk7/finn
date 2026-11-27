@@ -14,7 +14,7 @@ import os.path
 import xsi
 from finn_xsi.kernel_loader import load_kernel, load_needed
 from finn_xsi.sim_engine import SimEngine
-from finn_xsi.srcutil import order_pkg_first
+from finn_xsi.srcutil import prj_text
 from typing import Optional
 
 from finn.util.basic import get_rtlsim_timeout_error_message
@@ -38,31 +38,7 @@ def locate_glbl() -> Optional[str]:
 def compile_sim_obj(top_module_name, source_list, sim_out_dir, debug=False, behav=False):
     # create a .prj file with the source files
     with open(sim_out_dir + "/rtlsim.prj", "w") as f:
-        glbl = locate_glbl()
-        if glbl is not None:
-            f.write(f"verilog work {glbl}\n")
-
-        # extract (unique, by using a set) verilog headers for inclusion
-        verilog_headers = {
-            os.path.dirname(x) for x in source_list if x.endswith(".vh") or x.endswith(".svh")
-        }
-        verilog_header_incl_str = " ".join(["--include " + x for x in verilog_headers])
-
-        # packages must come before the modules that import them
-        srcs_list = order_pkg_first(source_list)
-        for src_line in srcs_list:
-            if src_line.endswith(".v"):
-                f.write(f"verilog work {verilog_header_incl_str} {src_line}\n")
-            elif src_line.endswith(".vhd"):
-                # note that Verilog header incls are not added for VHDL
-                f.write(f"vhdl2008 work {src_line}\n")
-            elif src_line.endswith(".sv"):
-                f.write(f"sv work {verilog_header_incl_str} {src_line}\n")
-            elif src_line.endswith(".vh") or src_line.endswith(".svh"):
-                # skip adding Verilog headers directly (see verilog_header_incl_str)
-                continue
-            else:
-                raise Exception(f"Unknown extension for .prj file sources: {src_line}")
+        f.write(prj_text(source_list, locate_glbl()))
 
     # now call xelab to generate the .so for the design to be simulated
     # list of libs for xelab retrieved from Vitis HLS cosim cmdline

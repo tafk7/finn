@@ -266,6 +266,12 @@ def tcl_list(*values: object) -> str:
     return "[list %s]" % " ".join(tcl_string(v) for v in values)
 
 
+def verilog_sources(project_dir) -> list:
+    """The source files a Vivado project listed in its all_verilog_srcs.txt, one per line."""
+    with open(os.path.join(project_dir, "all_verilog_srcs.txt")) as f:
+        return [line for line in f.read().splitlines() if line]
+
+
 def make_build_dir(prefix: str = "") -> str:
     """Creates a folder with given prefix to be used as a build dir.
     Use this function instead of tempfile.mkdtemp to ensure any generated files

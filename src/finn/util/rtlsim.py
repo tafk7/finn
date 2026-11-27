@@ -48,7 +48,11 @@ from finn.transformation.fpgadataflow.compile_cppsim import CompileCppSim
 from finn.transformation.fpgadataflow.create_stitched_ip import CreateStitchedIP
 from finn.transformation.fpgadataflow.prepare_cppsim import PrepareCppSim
 from finn.transformation.fpgadataflow.set_exec_mode import SetExecMode
-from finn.util.basic import get_liveness_threshold_cycles, make_build_dir
+from finn.util.basic import (
+    get_liveness_threshold_cycles,
+    make_build_dir,
+    verilog_sources,
+)
 from finn.util.data_packing import npy_to_rtlsim_input, rtlsim_output_to_npy
 from finn.util.mlo import mlo_set_select_bits
 
@@ -579,8 +583,7 @@ def _simulate_finnloop_iterations(finnloop_node, cfg, golden_frames, trace_base)
 def prepare_parallel_rtlsim(op, parallel_ipgen_path, behav=False):
     """Compile a xsi emulation library for the parallel "stream tap + body"."""
     parallel_dir = op.get_nodeattr("code_gen_dir_ipgen") + "/parallel"
-    with open(parallel_dir + "/all_verilog_srcs.txt", "r") as f:
-        all_verilog_srcs = f.read().split()
+    all_verilog_srcs = verilog_sources(parallel_dir)
     top_module_file_name = os.path.basename(os.path.realpath(parallel_ipgen_path))
     top_module_name = top_module_file_name.removesuffix(".v")
     single_src_dir = make_build_dir("rtlsim_parallel_" + top_module_name + "_")

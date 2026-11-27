@@ -5,6 +5,7 @@ build directory (disposable), with per-cache overrides."""
 import pytest
 
 import contextlib
+import onnx
 import os
 import shlex
 import shutil
@@ -284,6 +285,35 @@ def test_a_stitched_project_reads_rtl_resources_whole(name, state, tmp_path, mon
     assert {"memstream", "fifo.sv", "memstream.sv", "mvu.sv", "sim_ctrl.v"} <= {
         p.name for p in resources_read
     }
+
+
+def test_stitched_rtlsim_reads_each_listed_source_whole(state, tmp_path, monkeypatch):
+    from qonnx.core.modelwrapper import ModelWrapper  # noqa: PLC0415
+    from qonnx.util.basic import qonnx_make_model  # noqa: PLC0415
+
+    from finn.core import rtlsim_exec  # noqa: PLC0415
+
+    project = tmp_path / "stitched"
+    project.mkdir()
+    sources = [str(tmp_path / "rtl lib/fifo/hdl/fifo.sv"), str(project / "top_wrapper.v")]
+    # As the project's Tcl writes it: one path per line.
+    (project / "all_verilog_srcs.txt").write_text("".join(s + "\n" for s in sources))
+    (project / "top_wrapper.v").write_text("")
+    model = ModelWrapper(qonnx_make_model(onnx.helper.make_graph([], "empty", [], [])))
+    model.set_metadata_prop("vivado_stitch_proj", str(project))
+    model.set_metadata_prop("wrapper_filename", str(project / "top_wrapper.v"))
+    monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path / "build"))
+
+    class Compiled(Exception):
+        pass
+
+    def compile_sim_obj(top, source_list, *args, **kwargs):
+        raise Compiled(source_list)
+
+    monkeypatch.setattr(rtlsim_exec.finnxsi, "compile_sim_obj", compile_sim_obj)
+    with pytest.raises(Compiled) as compiled:
+        rtlsim_exec.rtlsim_exec_cppxsi(model, {}, dummy_data_mode=True)
+    assert compiled.value.args[0] == sources
 
 
 def test_xsi_key_changes_with_flags_and_pybind_version(state, monkeypatch):
