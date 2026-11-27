@@ -20,8 +20,7 @@ import sys
 import tarfile
 import tempfile
 import urllib.request
-import zipfile
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Optional
 
 from finn.util.paths import home
@@ -250,7 +249,7 @@ def git_checkout(url, commit, subdir, dest):
 
 
 def archive(url, dest) -> Path:
-    """Download and safely extract an archive; return its root directory.
+    """Download and safely extract a tar archive; return its root directory.
 
     An archive holding a single top-level directory has that directory as its
     root, as source archives usually do.
@@ -265,26 +264,13 @@ def archive(url, dest) -> Path:
         raise ResourceError("download-failed", f"Cannot download {url}: {error}") from None
     tree = dest / "tree"
     tree.mkdir()
-    if tarfile.is_tarfile(download):
-        if not hasattr(tarfile, "data_filter"):
-            raise ResourceError(
-                "archive-extraction-unsupported",
-                "Extracting archives safely needs Python 3.11.4 or later",
-            )
-        with tarfile.open(download) as tar:
-            try:
-                tar.extractall(tree, filter="data")
-            except tarfile.FilterError as error:
-                raise ResourceError("archive-unsafe", f"Unsafe archive {url}: {error}") from None
-    elif zipfile.is_zipfile(download):
-        with zipfile.ZipFile(download) as zip_file:
-            for name in zip_file.namelist():
-                path = PurePosixPath(name)
-                if path.is_absolute() or ".." in path.parts or "\\" in name:
-                    raise ResourceError("archive-unsafe", f"Unsafe archive {url}: member {name}")
-            zip_file.extractall(tree)
-    else:
-        raise ResourceError("archive-format-unknown", f"{url} is not a tar or zip archive")
+    if not tarfile.is_tarfile(download):
+        raise ResourceError("archive-format-unknown", f"{url} is not a tar archive")
+    with tarfile.open(download) as tar:
+        try:
+            tar.extractall(tree, filter="data")
+        except tarfile.FilterError as error:
+            raise ResourceError("archive-unsafe", f"Unsafe archive {url}: {error}") from None
     download.unlink()
     children = list(tree.iterdir())
     if len(children) == 1 and children[0].is_dir() and not children[0].is_symlink():

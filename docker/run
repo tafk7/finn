@@ -49,7 +49,8 @@ def host_paths(variable):
     ]
 
 
-def main(argv=None):
+def parse_args(argv):
+    """docker/run's options, and the command to run in the container."""
     parser = argparse.ArgumentParser(prog="docker/run", description=__doc__.split("\n\n")[0])
     tools = parser.add_mutually_exclusive_group()
     tools.add_argument("--fpga", action="store_true", help="require the AMD tools")
@@ -70,7 +71,32 @@ def main(argv=None):
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
     if args.notebook and command:
         fail("--notebook takes no command")
+    return args, command
 
+
+def amd_tools(args, env):
+    """The Compose files and mounts that bring the shell's AMD tools in, if any."""
+    vivado = None if args.no_tools else os.environ.get("XILINX_VIVADO")
+    if not vivado:
+        if args.fpga:
+            fail(
+                "--fpga needs the AMD tools, but XILINX_VIVADO is not set. Source a release's "
+                "settings64.sh (or load the site's Vivado module) first."
+            )
+        return [], []
+    # <root>/<release>/Vivado and <root>/Vivado/<release> alike: two levels up.
+    env["FINN_XILINX_ROOT"] = str(Path(vivado).resolve().parents[1])
+    volumes = []
+    for variable in ("XILINXD_LICENSE_FILE", "LM_LICENSE_FILE", "PLATFORM_REPO_PATHS"):
+        volumes += [f"{path}:{path}:ro" for path in host_paths(variable)]
+    override = os.environ.get("FINN_TOOL_DIR_OVERRIDE")
+    if override:
+        volumes.append(f"{override}:{override}:ro")
+    return [REPO / "compose.tools.yaml"], volumes
+
+
+def main(argv=None):
+    args, command = parse_args(argv)
     runtimes = sorted({r for value in args.runtime for r in value.split(",") if r})
     suffix = "".join("-" + r for r in runtimes)
     image = (
@@ -98,22 +124,9 @@ def main(argv=None):
     if (REPO / "ssh_keys").is_dir():
         volumes.append(f"{REPO / 'ssh_keys'}:/run/finn/ssh:ro")
 
-    files = [REPO / "compose.yaml"]
-    vivado = None if args.no_tools else os.environ.get("XILINX_VIVADO")
-    if vivado:
-        # <root>/<release>/Vivado and <root>/Vivado/<release> alike: two levels up.
-        env["FINN_XILINX_ROOT"] = str(Path(vivado).resolve().parents[1])
-        files.append(REPO / "compose.tools.yaml")
-        for variable in ("XILINXD_LICENSE_FILE", "LM_LICENSE_FILE", "PLATFORM_REPO_PATHS"):
-            volumes += [f"{path}:{path}:ro" for path in host_paths(variable)]
-        override = os.environ.get("FINN_TOOL_DIR_OVERRIDE")
-        if override:
-            volumes.append(f"{override}:{override}:ro")
-    elif args.fpga:
-        fail(
-            "--fpga needs the AMD tools, but XILINX_VIVADO is not set. Source a release's "
-            "settings64.sh (or load the site's Vivado module) first."
-        )
+    tool_files, tool_volumes = amd_tools(args, env)
+    volumes += tool_volumes
+    files = [REPO / "compose.yaml", *tool_files]
     files += [f for f in os.environ.get("COMPOSE_FILE", "").split(os.pathsep) if f]
     env["COMPOSE_FILE"] = os.pathsep.join(map(str, files))
 

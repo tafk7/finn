@@ -571,6 +571,34 @@ class ToolFailed(RuntimeError):
         )
 
 
+def _executable(name: str, cwd: Optional[StrPath], env: Optional[Mapping[str, str]]) -> str:
+    """The executable that ``run_tool`` runs for ``name``; ``ToolUnavailable`` if none."""
+    if name in XILINX_TOOLS:
+        name = xilinx_tool(name)
+    executable = resolve_executable(name, cwd, env)
+    if executable is None:
+        raise ToolUnavailable(name, "not found in PATH")
+    if not (os.path.isfile(executable) and os.access(executable, os.X_OK)):
+        raise ToolUnavailable(name, f"no executable {executable}")
+    return executable
+
+
+def _write_replay(
+    replay: StrPath,
+    argv: Sequence[str],
+    cwd: Optional[StrPath],
+    env_overrides: Optional[Mapping[str, str]],
+) -> None:
+    """Write a bash script that repeats the run of ``argv`` by hand."""
+    lines = ["#!/bin/bash", "set -e"]
+    if cwd is not None:
+        lines.append("cd -- " + shlex.quote(os.fspath(cwd)))
+    for name, value in (env_overrides or {}).items():
+        lines.append("export " + name + "=" + shlex.quote(value))
+    lines.append("exec " + shlex.join(argv))
+    Path(replay).write_text("\n".join(lines) + "\n")
+
+
 def run_tool(
     command: Sequence[StrPath],
     *,
@@ -618,22 +646,9 @@ def run_tool(
         os.stat(cwd)
         if not os.path.isdir(cwd):
             raise NotADirectoryError(errno.ENOTDIR, os.strerror(errno.ENOTDIR), os.fspath(cwd))
-    if argv[0] in XILINX_TOOLS:
-        argv[0] = xilinx_tool(argv[0])
-    executable = resolve_executable(argv[0], cwd, env)
-    if executable is None:
-        raise ToolUnavailable(argv[0], "not found in PATH")
-    if not (os.path.isfile(executable) and os.access(executable, os.X_OK)):
-        raise ToolUnavailable(argv[0], f"no executable {executable}")
-    argv[0] = executable
+    argv[0] = _executable(argv[0], cwd, env)
     if replay is not None:
-        lines = ["#!/bin/bash", "set -e"]
-        if cwd is not None:
-            lines.append("cd -- " + shlex.quote(os.fspath(cwd)))
-        for name, value in (env_overrides or {}).items():
-            lines.append("export " + name + "=" + shlex.quote(value))
-        lines.append("exec " + shlex.join(argv))
-        Path(replay).write_text("\n".join(lines) + "\n")
+        _write_replay(replay, argv, cwd, env_overrides)
         if transcript is None:
             transcript = os.path.splitext(os.fspath(replay))[0]
     try:
