@@ -32,9 +32,27 @@ void runDockerCommand(String args) {
     String image = sh(returnStdout: true,
                       script: "PYTHONPATH=ci python3 -m finn_ci image ${action}").trim()
     withEnv(["FINN_IMAGE=${image}"]) {
-      sh "./docker/run --no-build ${args}"
+      String options = agentDockerRunOptions().collect { shellQuote(it) }.join(' ')
+      sh "./docker/run --no-build ${options} ${args}"
     }
   }
+}
+
+// Pure compute: docker/run's options for the agent's caches (FINN_CI_CACHES, which
+// withAgentNfsEnv sets), as options rather than a Compose file, so that they apply
+// on both of docker/run's paths (Compose, and plain `docker run`, which the job's
+// FINN_DOCKER_EXTRA or an agent without Compose selects). The container takes the
+// agent's host name: bsub's gethostbyname() on a generated one fails with "Error 0".
+List<String> agentDockerRunOptions() {
+  String caches = env.FINN_CI_CACHES
+  if (!caches) { return [] }
+  return [
+    '--hostname', env.NODE_NAME ?: 'localhost',
+    '--volume', "${caches}:/finn_cache",
+    '--env', 'TORCH_HOME=/finn_cache/torch',
+    '--env', 'HF_HOME=/finn_cache/huggingface',
+    '--env', 'UV_CACHE_DIR=/finn_cache/uv',
+  ]
 }
 
 void unstashIfPresent(String stashName) {

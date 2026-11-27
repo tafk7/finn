@@ -4,7 +4,8 @@
 """Run a command in FINN's container, as a native shell would run it.
 
     docker/run [--fpga | --no-tools] [--runtime NAME] [--release] [--notebook]
-               [--build | --no-build] [--dry-run] [-v SRC:DST] [-e VAR[=VALUE]] [-- COMMAND...]
+               [--build | --no-build] [--dry-run] [--hostname NAME] [-v SRC:DST]
+               [-e VAR[=VALUE]] [-- COMMAND...]
     docker/run --explain-extra
 
 The container is compose.yaml's: this checkout and the working directory, FINN_HOME
@@ -20,16 +21,16 @@ The image is built with `docker buildx bake` when it is missing (--build rebuild
 it): finn:dev, finn:dev-<runtime> with --runtime (xrt, slash), finn:release with
 --release (FINN from its wheel). COMPOSE_FILE adds further Compose files.
 
-FINN_DOCKER_EXTRA, extra `docker run` arguments, becomes a Compose override when
-Compose expresses every one; otherwise the container starts with plain `docker run`
-and the arguments as given (docker/docker_extra.py). --explain-extra says which,
-without the values.
+Without Docker Compose (Ubuntu's docker.io has none), and whenever FINN_DOCKER_EXTRA
+(a site's extra `docker run` arguments, run-docker.sh's variable) is set, the same
+container starts with plain `docker run`, FINN_DOCKER_EXTRA appended as given
+(docker/plain_run.py); COMPOSE_FILE then cannot apply, so docker/run refuses it.
+--explain-extra says which way it starts, without FINN_DOCKER_EXTRA's values.
 """
 import argparse
-import docker_extra
 import importlib.util
-import json
 import os
+import plain_run
 import shlex
 import shutil
 import subprocess
@@ -77,8 +78,9 @@ def parse_args(argv):
     parser.add_argument(
         "--explain-extra",
         action="store_true",
-        help="say how FINN_DOCKER_EXTRA is applied, without its values; run nothing",
+        help="say how the container starts, without FINN_DOCKER_EXTRA's values; run nothing",
     )
+    parser.add_argument("--hostname", default="", help="the container's host name")
     parser.add_argument("-v", "--volume", action="append", default=[], help="an extra mount")
     parser.add_argument("-e", "--env", action="append", default=[], help="an extra variable")
     parser.add_argument("command", nargs=argparse.REMAINDER)
@@ -131,44 +133,24 @@ def job_install_root():
     return Path(path)
 
 
-def docker_extra_tokens():
-    """FINN_DOCKER_EXTRA's arguments, and their Compose service keys (None when Compose
-    cannot express them all)."""
-    value = os.environ.get(docker_extra.VARIABLE, "")
-    if not value.strip():
-        return [], None
-    try:
-        tokens = docker_extra.split(value)
-    except docker_extra.ExtraError as error:
-        fail(str(error))
-    return tokens, docker_extra.translate(tokens)[0]
-
-
-def render(files, env, service):
-    """The service as Compose resolves it from these files."""
-    if not shutil.which("docker"):
-        fail("docker is not installed")
-    rendered = subprocess.run(
-        ["docker", "compose", "--project-directory", str(REPO), "--profile", "notebook"]
-        + ["config", "--format", "json"],
-        env={**os.environ, **env, "COMPOSE_FILE": os.pathsep.join(map(str, files))},
-        capture_output=True,
-        text=True,
+def has_compose():
+    """Whether `docker compose` is installed."""
+    return (
+        bool(shutil.which("docker"))
+        and not subprocess.run(["docker", "compose", "version"], capture_output=True).returncode
     )
-    if rendered.returncode:
-        fail(f"docker compose config failed: {rendered.stderr.strip()}")
-    return json.loads(rendered.stdout)["services"][service]
 
 
 def main(argv=None):
     args, command = parse_args(argv)
-    if args.explain_extra:
-        try:
-            print(docker_extra.explain(os.environ.get(docker_extra.VARIABLE, "")))
-        except docker_extra.ExtraError as error:
-            fail(str(error))
-        return
-    extra, extra_service = docker_extra_tokens()
+    value = os.environ.get(plain_run.VARIABLE, "")
+    try:
+        if args.explain_extra:
+            print(plain_run.explain(value, has_compose()))
+            return
+        extra = plain_run.split(value)
+    except plain_run.PlainRunError as error:
+        fail(str(error))
     runtimes = sorted({r for value in args.runtime for r in value.split(",") if r})
     suffix = "".join("-" + r for r in runtimes)
     image = (
@@ -184,6 +166,8 @@ def main(argv=None):
         "FINN_HOME": str(paths.home().absolute()),
         "FINN_BUILD_DIR": str(paths.scratch()),
     }
+    if args.hostname:
+        env["FINN_HOSTNAME"] = args.hostname
     # ensure build dir exists locally
     for directory in (env["FINN_HOME"], env["FINN_BUILD_DIR"]):
         os.makedirs(directory, exist_ok=True)
@@ -198,41 +182,44 @@ def main(argv=None):
 
     tool_files, tool_volumes = amd_tools(args, env)
     volumes += tool_volumes
-    own = [REPO / "compose.yaml", *tool_files]
-    if extra_service:
-        own.append(docker_extra.write_override(extra_service, env["FINN_BUILD_DIR"]))
-    files = own + [f for f in os.environ.get("COMPOSE_FILE", "").split(os.pathsep) if f]
-    env["COMPOSE_FILE"] = os.pathsep.join(map(str, files))
-
     service = "notebook" if args.notebook else "finn"
-    argv = ["docker", "compose", "--progress", "quiet", "--project-directory", str(REPO)]
-    argv += ["run", "--rm", "--pull", "never"]
-    if args.notebook:
-        argv.append("--service-ports")
-    # Drop the pseudo-TTY when stdin is not a terminal (e.g. Jenkins), so that the run
-    # does not fail with "the input device is not a TTY".
-    if not sys.stdin.isatty():
-        argv.append("-T")
-    for volume in volumes:
-        argv += ["--volume", volume]
-    for variable in args.env:
-        argv += ["--env", variable]
-    argv += [service, *command]
-    if extra and extra_service is None:
-        # FINN_DOCKER_EXTRA has flags Compose cannot express: plain docker run, from
-        # the same definition.
-        try:
-            argv = docker_extra.docker_run(
-                render(own, env, service),
-                render(files, env, service),
-                extra,
-                volumes,
-                args.env,
-                command,
-                sys.stdin.isatty(),
+    compose_files = [f for f in os.environ.get("COMPOSE_FILE", "").split(os.pathsep) if f]
+
+    if extra or not has_compose():
+        # Plain docker run, from the same definition (docker/plain_run.py).
+        why = f"{plain_run.VARIABLE} is set" if extra else "docker compose is not installed"
+        if compose_files:
+            fail(
+                f"COMPOSE_FILE needs docker compose, and docker/run starts the container "
+                f"with plain `docker run` ({why}); pass its settings as docker/run's "
+                f"--hostname, --volume and --env, or in {plain_run.VARIABLE}"
             )
-        except docker_extra.ExtraError as error:
+        try:
+            definition = plain_run.definition(
+                {**os.environ, **env}, service, tools=bool(tool_files)
+            )
+            argv = plain_run.docker_run(
+                definition, extra, volumes, args.env, command, sys.stdin.isatty()
+            )
+        except plain_run.PlainRunError as error:
             fail(str(error))
+    else:
+        env["COMPOSE_FILE"] = os.pathsep.join(
+            map(str, [REPO / "compose.yaml", *tool_files, *compose_files])
+        )
+        argv = ["docker", "compose", "--progress", "quiet", "--project-directory", str(REPO)]
+        argv += ["run", "--rm", "--pull", "never"]
+        if args.notebook:
+            argv.append("--service-ports")
+        # Drop the pseudo-TTY when stdin is not a terminal (e.g. Jenkins), so that the run
+        # does not fail with "the input device is not a TTY".
+        if not sys.stdin.isatty():
+            argv.append("-T")
+        for volume in volumes:
+            argv += ["--volume", volume]
+        for variable in args.env:
+            argv += ["--env", variable]
+        argv += [service, *command]
 
     bake = ["docker", "buildx", "bake", "--load", "release" if args.release else "finn"]
     bake_env = {"FINN_RUNTIMES": ",".join(runtimes)}

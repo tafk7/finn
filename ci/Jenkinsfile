@@ -219,9 +219,10 @@ void announceCiMode() {
   }
 }
 
-// How docker/run applies the job's FINN_DOCKER_EXTRA (a Compose override, or plain
-// `docker run` with the arguments as given) and why; it names flags, never values,
-// and stops the build when the string does not split as shell words.
+// How docker/run starts the container (docker compose, or plain `docker run` with
+// the job's FINN_DOCKER_EXTRA appended as given, or because the agent has no
+// Compose); it counts the extra arguments, never shows them, and stops the build
+// when the string does not split as shell words.
 void announceDockerExtra() {
   sh './docker/run --explain-extra'
 }
@@ -1029,7 +1030,7 @@ void reapOrphanedLsfJobs() {
 }
 
 // The agent's caches: finn_cache holds the container's torch, Hugging Face and uv
-// downloads (ci/compose.ci.yaml mounts it), finn_home is the agents' FINN_HOME.
+// downloads (runDockerCommand mounts it), finn_home is the agents' FINN_HOME.
 // Under FINN_CI_NFS_ROOT both persist per agent. Without it the download cache is
 // host-local under finnCiLocalCacheRoot() and FINN_HOME is docker/run's default.
 String agentCacheDir(String node) {
@@ -1051,16 +1052,13 @@ void prepareAgentCaches(String node) {
   sh "du -sh ${shellQuote(cachesDir)}/* 2>/dev/null || true"
 }
 
-// Pure compute: the env-var list for the agent's caches and ci/compose.ci.yaml,
-// which mounts them and pins the container's hostname to the agent's (bsub's
-// gethostbyname() on a generated container hostname fails with "Error 0").
-// compose.ci.yaml goes after any Compose files the DSL names in COMPOSE_FILE.
+// Pure compute: the env-var list for the agent's caches. runDockerCommand mounts
+// FINN_CI_CACHES and pins the container's hostname to the agent's
+// (agentDockerRunOptions, in ci/common.groovy).
 List<String> agentCachesEnv() {
   String node = env.NODE_NAME ?: 'localhost'
-  String composeFile = "${env.WORKSPACE}/ci/compose.ci.yaml"
   List<String> envList = [
     "FINN_CI_CACHES=${agentCacheDir(node)}",
-    "COMPOSE_FILE=${env.COMPOSE_FILE ? env.COMPOSE_FILE + ':' : ''}${composeFile}",
   ]
   String cachesDir = finnAgentCachesDir(node)
   if (cachesDir) {

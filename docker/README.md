@@ -64,6 +64,10 @@ and `compose.tools.yaml` (the AMD install root of `XILINX_VIVADO`, read-only, an
 AMD's own variables). `docker/run` derives their variables from the host and runs
 `docker compose run`; `--dry-run` prints them and the command. Dev Containers and
 agent sandboxes use the same files with the variables set in their own configuration.
+Without Docker Compose (Ubuntu's `docker.io` ships none), `docker/run` starts the
+same container with plain `docker run`, from [plain_run.py](./plain_run.py), which
+holds the same definition; `tests/docker_scripts/test_plain_run.py` compares the two
+with `docker compose config`, so a change to `compose.yaml` goes in both.
 
 AMD tools follow the shell, as natively: with `XILINX_VIVADO` set (a sourced
 `settings64.sh`, a site module, a CI job), the install root is mounted and the
@@ -71,8 +75,14 @@ container sources that release's `settings64.sh` at start, in login shells and,
 through `BASH_ENV`, in every bash, so `docker exec` sessions have the tools too.
 A job written for `run-docker.sh` may name the release with `FINN_XILINX_PATH` and
 `FINN_XILINX_VERSION` instead: the root is mounted and the container sources
-`settings64.sh` from `<path>/<version>/Vivado` or `<path>/Vivado/<version>`, and
-stops at start when neither has one.
+`settings64.sh` from `<path>/<version>/Vivado` or `<path>/Vivado/<version>`, with
+the release's Vitis and Vitis HLS beside it, and stops at start when neither has one.
+Either way the container also sets `run-docker.sh`'s names for the release,
+`VIVADO_PATH`, `VITIS_PATH` and `HLS_PATH` (Vitis's tree from 2024.2), which a site's
+LSF wrapper forwards to the farm. A caller's own `BASH_ENV` (`-e BASH_ENV=...`, such
+as an LSF kit's `enable.sh`) runs after FINN's in every bash instead of replacing it,
+and `FINN_TOOL_DIR_OVERRIDE`'s directory comes first on `PATH`, ahead of the
+release's tools.
 `--fpga` requires the tools, `--no-tools` leaves them out. Licences and platforms
 use AMD's names: `XILINXD_LICENSE_FILE` and `LM_LICENSE_FILE` (licence files among
 them are mounted read-only; `port@host` servers need nothing) and
@@ -87,14 +97,17 @@ the mounted checkout at start, editable and without dependencies, after checking
 that its `uv.lock` matches the image's; the release image has FINN installed.
 `ssh_keys/` in the checkout, when present, becomes the container's `~/.ssh`.
 
-`-v SOURCE:TARGET[:MODE]` and `-e NAME[=VALUE]` add mounts and variables; further
-Compose files (a site's or CI's) go in `COMPOSE_FILE` and apply after FINN's.
-`FINN_DOCKER_EXTRA`, `run-docker.sh`'s extra `docker run` arguments, is still read:
-when Compose expresses every flag they become a Compose override between FINN's
-files and `COMPOSE_FILE`'s; otherwise the container starts with plain `docker run`
-from the same definition and the arguments as given
-([docker_extra.py](./docker_extra.py)). `docker/run --explain-extra` says which,
-without the values.
+`-v SOURCE:TARGET[:MODE]`, `-e NAME[=VALUE]` and `--hostname NAME` add mounts,
+variables and the container's host name; further Compose files (a site's) go in
+`COMPOSE_FILE` and apply after FINN's. `FINN_DOCKER_EXTRA`, `run-docker.sh`'s extra
+`docker run` arguments, is still read: when it is set the container starts with
+plain `docker run`, in `run-docker.sh`'s order: FINN's definition, then the
+arguments as given (split as shell words), then `docker/run`'s `--hostname`, `-v`
+and `-e`. FINN's own network and mounts give way to the ones the extra names, since
+`docker run` would join both networks and refuses two mounts on one target. On the
+plain path `COMPOSE_FILE` cannot apply, and `docker/run` stops if it is set.
+`docker/run --explain-extra` says which way the container starts, counting the
+extra arguments without showing them.
 
 ### Images
 
@@ -242,13 +255,13 @@ Vivado; the pinned Tcl declares Vivado 2025.2.
 | `run-docker.sh notebook` | `docker/run --notebook` |
 | `scripts/finn-env.sh` | `source .venv/bin/activate` after `uv sync`, with the AMD tools from a sourced `settings64.sh` |
 | `FINN_XILINX_PATH`, `FINN_XILINX_VERSION` | `XILINX_VIVADO`, from a sourced `settings64.sh` or set to `<root>/<release>/Vivado`; both still read when it is unset |
-| `VIVADO_PATH`, `VITIS_PATH`, `HLS_PATH` | `XILINX_VIVADO`, `XILINX_VITIS`, `XILINX_HLS` |
+| `VIVADO_PATH`, `VITIS_PATH`, `HLS_PATH` | `XILINX_VIVADO`, `XILINX_VITIS`, `XILINX_HLS`; the container still sets the old names for a site's wrappers |
 | `fetch-repos.sh`, Python clones in `deps/` | `uv.lock` and verified resources |
 | `deps/pynq_golden` | `$FINN_HOME/golden`, or `FINN_GOLDEN_DIR` |
 | `requirements.txt`, `docs/requirements.txt` | dependency groups and `uv.lock`; `uv export` if needed |
 | `FINN_DOCKER_TAG`, `FINN_DOCKER_NO_CACHE` | `FINN_IMAGE`; `docker/run --build` |
 | `FINN_SKIP_XRT_DOWNLOAD`, `XRT_DEB_VERSION` | `--runtime xrt` with the pinned manifest; `SOURCE=supply` for site packages |
 | `FINN_SKIP_DEP_REPOS`, `FINN_SKIP_BOARD_FILES` | resources on first use; `FINN_RESOURCES_OFFLINE=1` with a prepared cache |
-| `FINN_DOCKER_EXTRA` | still read: a Compose override, or plain `docker run` with the arguments as given; or `-v`/`-e`, or a Compose file in `COMPOSE_FILE` |
+| `FINN_DOCKER_EXTRA` | still read: plain `docker run` with the arguments as given; or `-v`/`-e`/`--hostname`, or a Compose file in `COMPOSE_FILE` |
 | `DOCKER_INTERACTIVE`, `FINN_INST_NAME` | terminals are detected |
 | `FINN_SINGULARITY` | `apptainer build finn.sif docker-daemon://finn:release` |

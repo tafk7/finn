@@ -3,8 +3,9 @@
 # docker/run sets the variables below from the host and runs `docker compose run`;
 # anything else that starts FINN's container sets them itself. Host paths are mounted
 # at the same paths, so generated scripts and builds mean the same inside and out.
-# compose.tools.yaml adds the AMD tools; further files (CI's caches, say) go in
-# COMPOSE_FILE after these two.
+# compose.tools.yaml adds the AMD tools; further files go in COMPOSE_FILE after these
+# two. docker/plain_run.py holds the same definition for hosts without Compose: change
+# both (tests/docker_scripts/test_plain_run.py compares them).
 #
 #   FINN_IMAGE      the image (default finn:dev, built by `docker buildx bake`)
 #   FINN_UID/GID    the caller's ids
@@ -14,6 +15,7 @@
 #                   it when it lies outside)
 #   FINN_HOME       FINN's persistent state (default ~/.finn)
 #   FINN_BUILD_DIR  disposable build output (default /tmp/finn_build_<uid>)
+#   FINN_HOSTNAME   the container's host name (default: Docker's)
 name: finn
 
 x-finn: &finn
@@ -24,6 +26,7 @@ x-finn: &finn
   # each new one takes a subnet from Docker's pools, which can collide with site ranges.
   network_mode: bridge
   user: "${FINN_UID:-1000}:${FINN_GID:-1000}"
+  hostname: ${FINN_HOSTNAME:-}  # empty: none set
   working_dir: ${FINN_WORKDIR:-${FINN_ROOT:-${PWD}}}
   environment:
     USER: ${USER:-finn}
