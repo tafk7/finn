@@ -18,10 +18,11 @@ import shutil
 import sys
 import sysconfig
 from dataclasses import asdict, dataclass
-from typing import List, Optional, Tuple
+from typing import Optional
 
 from finn.util import launcher, releases
 from finn.util.launcher import ToolchainMismatch, ToolUnavailable
+from finn.util.releases import Release
 
 OK, NOTE, WARN, FAIL = "ok", "note", "warn", "fail"
 
@@ -36,8 +37,8 @@ class Finding:
 
 class Report:
     def __init__(self):
-        self.findings: List[Finding] = []
-        self.release: Optional[Tuple[int, int]] = None
+        self.findings: list[Finding] = []
+        self.release: Optional[Release] = None
 
     def add(self, section, label, state, detail=""):
         self.findings.append(Finding(section, label, state, detail))

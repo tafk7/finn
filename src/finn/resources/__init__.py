@@ -35,7 +35,7 @@ import os
 from dataclasses import dataclass
 from importlib.util import find_spec
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Optional
 
 from . import _declare, _store
 from ._declare import PREFIX, DeclarationError, Resource, ResourceError
@@ -53,7 +53,7 @@ __all__ = [
     "status",
 ]
 
-_declared: Optional[Dict[str, Resource]] = None
+_declared: Optional[dict[str, Resource]] = None
 
 
 @dataclass(frozen=True)
@@ -65,7 +65,7 @@ class Status:
     path: Optional[str] = None
 
 
-def declarations() -> Dict[str, Resource]:
+def declarations() -> dict[str, Resource]:
     """FINN's declarations, then the installed packages', by name in order."""
     global _declared
     if _declared is None:
@@ -156,12 +156,12 @@ def join(name: str, *parts: str) -> str:
     return location
 
 
-def paths(kind: str) -> List[str]:
+def paths(kind: str) -> list[str]:
     """Return the directories of every resource of a kind, in declaration order."""
     return [path(r.name) for r in declarations().values() if kind in r.kind]
 
 
-def fetch(names, dest=None) -> List[str]:
+def fetch(names, dest=None) -> list[str]:
     """Fetch git resources into a cache root (default: the first writable one).
 
     Unlike path(), this ignores overrides and copies elsewhere: it fills one cache,

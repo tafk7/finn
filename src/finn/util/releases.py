@@ -14,9 +14,9 @@ entries for the release in use.
 """
 
 from dataclasses import dataclass
-from typing import Dict, Optional, Tuple
+from typing import Optional
 
-Release = Tuple[int, int]
+Release = tuple[int, int]
 
 
 @dataclass(frozen=True)
@@ -47,7 +47,7 @@ def name(release: Release) -> str:
     return "%d.%d" % release
 
 
-NOTES: Dict[str, ReleaseNote] = {
+NOTES: dict[str, ReleaseNote] = {
     "vitis-sitecustomize": ReleaseNote(
         tools="Vitis",
         first=(2026, 2),
