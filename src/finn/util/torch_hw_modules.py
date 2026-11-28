@@ -112,6 +112,7 @@ class PWPolyFFunction(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, x, coeffs, neg_clamp_val, pos_clamp_val, func, K, degree):
+        """Evaluate the piecewise polynomial activation of x, as the RTL computes it."""
         return _pwpolyf_eval(x, coeffs, neg_clamp_val, pos_clamp_val, func, K, degree)
 
     @staticmethod
