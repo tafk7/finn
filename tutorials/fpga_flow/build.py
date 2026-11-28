@@ -29,6 +29,8 @@
 
 # This file is intended to serve as an example showing how to set up custom builds
 # using FINN. The custom build can be launched from its folder like this:
+# cd /path/to/folder && python build.py
+# or, in FINN's container:
 # cd /path/to/folder && /path/to/finn/docker/run --fpga -- python build.py
 
 

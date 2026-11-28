@@ -275,7 +275,7 @@ def verilog_sources(project_dir) -> list:
 def make_build_dir(prefix: str = "") -> str:
     """Creates a folder with given prefix to be used as a build dir.
     Use this function instead of tempfile.mkdtemp to ensure any generated files
-    will survive on the host after the FINN Docker container exits. The parent is
+    land in FINN's build directory, which FINN's container mounts from the host. The parent is
     FINN_BUILD_DIR, by default /tmp/finn_build_<uid>."""
     build_dir = str(scratch())
     os.makedirs(build_dir, exist_ok=True)

@@ -45,6 +45,7 @@ To use it, first create a folder with the necessary configuration and model file
 3. Create a JSON file with the build configuration. It must be named ``dataflow_build_dir/dataflow_build_config.json``.
    Read more about the build configuration options on :py:mod:`finn.builder.build_dataflow_config.DataflowBuildConfig`.
    You can find an example .json file under ``src/finn/qnn-data/build_dataflow/dataflow_build_config.json``
+   (in an installed FINN, under ``build_dataflow`` in the directory ``finn resources path qnn-data`` prints)
 4. (Optional) create a JSON file with the specialize layers configuration. It must be named ``dataflow_build_dir/specialize_layers_config.json``
    You can find an example .json file under ``src/finn/qnn-data/build_dataflow/specialize_layers_config.json``.
 5. (Optional) create a JSON file with the folding configuration. It must be named ``dataflow_build_dir/folding_config.json``.
@@ -52,10 +53,11 @@ To use it, first create a folder with the necessary configuration and model file
    Instead of specifying the folding configuration, you can use the `target_fps` option in the build configuration
    to control the degree of parallelization for your network.
 
-Now you can invoke the simple dataflow build as follows:
+Now you can invoke the simple dataflow build as follows, natively or in FINN's container:
 
 ::
 
+  build_dataflow /path/to/model
   ./docker/run --fpga --volume /path/to/model:/path/to/model -- build_dataflow /path/to/model
 
 Depending on the chosen output products, the dataflow build will run for a while
@@ -247,7 +249,7 @@ Advanced mode
 In other cases, you may want to have more control over the build process to
 implement your own FINN flow with a different combination of compilation steps,
 applying preprocessing to the model, calling custom transformations and so on.
-Mount the custom build directory and execute its Python script as follows:
+Execute the custom build directory's Python script as follows:
 
 1. Create a new folder for the custom build. It's best to keep this folder
 outside the FINN repo folder for cleaner separation. Let's call this folder
@@ -258,21 +260,21 @@ you would like when executed, for instance ``custom_build_dir/build.py`` and
 ``custom_build_dir/build_quick.py``.
 You should also put any ONNX model(s) or other
 Python modules you may want to include in your build flow in this folder (so that they get
-mounted into the Docker container while building). Besides the data placement,
+mounted into FINN's container when you build there). Besides the data placement,
 you have complete freedom on how to implement the build flow here, including
 calling the steps from the simple dataflow build mode above,
 making calls to FINN library functions, preprocessing and altering models, building several variants etc.
 You can find a basic example of a build flow under ``src/finn/qnn-data/build_dataflow/build.py``.
 
-You can launch the desired custom build flow from that folder using:
+You can launch the desired custom build flow from that folder, natively or in FINN's container, using:
 
 ::
 
  cd /path/to/custom_build_dir
+ python <name-of-build-flow>.py
  /path/to/finn/docker/run --fpga -- python <name-of-build-flow>.py
 
-``docker/run`` mounts the working directory into the FINN Docker container at
-its own path and runs the command there. For example, use ``python build.py`` to
-run ``build.py`` in that directory.
+``docker/run`` mounts the working directory into the container at
+its own path and runs the command there.
 
 If you would like to learn more about advance builder settings, please have a look at `our tutorial about this topic <https://github.com/Xilinx/finn/blob/main/notebooks/advanced/4_advanced_builder_settings.ipynb>`_.

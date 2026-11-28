@@ -7,9 +7,10 @@ Frequently Asked Questions
 Can't find the answer to your question here? Check `FINN GitHub Discussions <https://github.com/Xilinx/finn/discussions>`_.
 
 
-Can I install FINN out of the Docker container?
-    We do not support out of the Docker implementations at the moment. This is due
-    to the high complexity of the FINN project dependencies.
+Can I install FINN without Docker?
+    Yes. FINN installs into any Python 3.12 environment, and from a checkout ``uv sync``
+    installs its locked environment; FINN's container is the same environment on a known
+    Ubuntu. See :ref:`getting_started`.
 
 Since FINN uses ONNX, can I compile any model from the ONNX Model Zoo to an FPGA accelerator?
     The short answer is no. FINN uses ONNX in a specific (non-standard) way, including custom layer
@@ -33,18 +34,15 @@ Does FINN only work with the example networks?
     The current best practice for custom networks is to take a working network and gradually modify it.
 
 What is the expected background for using FINN?
-    Some general knowledge of Python, Docker, machine learning with neural networks and Jupyter notebooks
-    is expected.
+    Some general knowledge of Python, machine learning with neural networks and Jupyter notebooks
+    is expected, and of Docker if you use FINN's container.
     Our goal is to make the tool in a shape and form so that no hardware/FPGA background
     should be necessary, although having some knowledge would give better results.
 
 What operating systems are supported by FINN?
-    FINN should work fine under any Linux-based OS capable of running Vivado/Vitis, as long
-    as you install Docker (``docker-ce``) on your machine.
-
-I am getting DocNav and Model_Composer errors when launching the Docker image.
-    We do not mount those particular directories into the Docker container because they are not
-    used. The errors are Vivado related but you can safely ignore them.
+    Linux on x86-64. FINN runs natively on a distribution that provides Python 3.12 and
+    can run Vivado/Vitis; FINN's container and CI use Ubuntu 24.04, and the container runs
+    on any Linux with Docker.
 
 What board do you recommend to start working with FINN?
     Our preferred target platforms are those supported by  `PYNQ <http://www.pynq.io/board.html>`_.

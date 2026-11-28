@@ -27,7 +27,7 @@ and make sure to include the resulting ONNX files, and the commit hash you are w
 
 1. Clone the FINN repository
 2. Checkout the dev branch, with commit hash: [...]
-3. Start the docker container with the command: [...]
+3. Install and start FINN: natively (the install command) or in the container (the `./docker/run` command): [...], and attach the output of `finn doctor`
 4. Run transformation [...] on ONNX file [...] or run the dataflow builder with the following settings: [...]
 5. [Further steps ...]
 

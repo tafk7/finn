@@ -56,12 +56,13 @@ further detailed below:
   your PRs have dependencies on each other please state in which order
   they should be reviewed and merged.
 
-Docker images
-===============
+Environment and container
+=========================
 
 ``pyproject.toml`` declares Python dependencies and groups; ``uv.lock`` records
 exact versions and Git selections. Use uv 0.10.0 for updates and commit both
-files. All groups resolve together. Run ``uv sync --locked`` for development.
+files. All groups resolve together. Run ``uv sync --locked`` for development
+(see :ref:`getting_started:From a checkout, with the locked environment`).
 
 ``docker buildx bake`` builds the image (``docker/Dockerfile``: Ubuntu 24.04,
 Python 3.12 and the locked dependencies; runtimes such as XRT on request; a
@@ -82,15 +83,15 @@ in ``FINN_HOME`` (default ``~/.finn``); build output lives in the disposable
 ``FINN_BUILD_DIR`` (default ``/tmp/finn_build_<uid>``). See ``docker/README.md``
 and ``ci/README.md`` for the full variable list, migration and validation contracts.
 
-(Re-)launching builds outside of Docker
-========================================
+(Re-)launching generated builds
+================================
 
-It is possible to launch builds for FINN-generated HLS IP and stitched-IP folders outside of the Docker container.
-This may be necessary for visual inspection of the generated designs inside the Vivado GUI, if you run into licensing
-issues during synthesis, or other environmental problems.
-Generated scripts name FINN's sources (finn-rtllib, finn-hlslib and the other resources) by absolute path, and
-``docker/run --fpga`` mounts the checkout and ``FINN_HOME`` at their host paths, so the various .tcl scripts and .xpr
-project files can be launched on the host as they are.
+You can relaunch the generated scripts and projects for FINN's HLS IP and stitched-IP folders yourself,
+for instance to inspect the designs in the Vivado GUI.
+Generated scripts name FINN's sources (finn-rtllib, finn-hlslib and the other resources) by absolute path.
+Natively they run as they are, in a shell that sourced the same release; and since
+``docker/run`` mounts the checkout, ``FINN_HOME`` and the build directory at their host paths, the .tcl scripts and
+.xpr project files of a container build can be launched on the host as they are too.
 
 Linting
 =======
@@ -98,7 +99,8 @@ Linting
 We use a pre-commit hook to auto-format Python code and check for issues.
 See https://pre-commit.com/ for installation. Once you have pre-commit, you can install
 the hooks into your local clone of the FINN repo.
-It is recommended to do this **on the host** and not inside the Docker container:
+The locked environment (``uv sync``) includes pre-commit. Install the hooks natively,
+**on the host**, rather than inside the container:
 
 ::
 
@@ -140,23 +142,23 @@ These tests can be roughly grouped into three categories:
 Additionally, qonnx, brevitas and finn-hlslib also include their own test suites.
 The full FINN compiler test suite
 (which will take several hours to run) can be executed
-by:
+in the activated locked environment, with the AMD tools sourced, by:
 
 ::
 
-  ./docker/run --fpga -- python -m pytest
+  python -m pytest
 
 There is a quicker variant of the test suite that skips the tests marked as
 requiring Vivado or as slow-running tests:
 
 ::
 
-  ./docker/run -- bash docker/quicktest.sh
+  bash docker/quicktest.sh
 
+In the container, prefix either with ``./docker/run --fpga --``.
 When developing a new feature it is useful to be able to run just a single test,
 or a group of tests that e.g. share the same prefix.
-You can do this inside the Docker container
-from the FINN root directory as follows:
+You can do this from the FINN root directory as follows:
 
 ::
 
@@ -166,7 +168,7 @@ from the FINN root directory as follows:
 If you want to run tests in parallel (e.g. to take advantage of a multi-core CPU)
 you can use pytest-xdist with `--dist=loadgroup`, e.g. `pytest -k mytest -n auto --dist=loadgroup`. Tests that exchange checkpoints must share an `xdist_group` marker so they stay on one worker.
 
-Finally, the full test suite with appropriate parallelization can be run inside the container by:
+Finally, the full test suite with appropriate parallelization can be run by:
 
 ::
 
