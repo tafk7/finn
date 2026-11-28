@@ -40,6 +40,12 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 
 
+NO_DOCKER = (
+    "FINN also runs without Docker: see Getting Started, "
+    "https://finn.readthedocs.io/en/latest/getting_started.html"
+)
+
+
 def fail(message):
     sys.exit(f"docker/run: {message}")
 
@@ -238,11 +244,19 @@ def main(argv=None):
         print(shlex.join(argv))
         return
     if not shutil.which("docker"):
-        fail("docker is not installed")
+        fail(f"docker is not installed. {NO_DOCKER}")
+    daemon = subprocess.run(["docker", "version"], capture_output=True, text=True)
+    if daemon.returncode != 0:
+        reason = (daemon.stderr.strip().splitlines() or ["no answer"])[-1]
+        fail(
+            f"cannot use the Docker daemon ({reason}). Docker must run without sudo for "
+            f"your user; on a shared machine, ask its administrator for that. {NO_DOCKER}"
+        )
     missing = subprocess.run(["docker", "image", "inspect", image], capture_output=True).returncode
     if args.build or (missing and not args.no_build):
         bake_env["FINN_VERSION"] = finn_version()
-        subprocess.run(bake, cwd=REPO, env={**os.environ, **bake_env}, check=True)
+        if subprocess.run(bake, cwd=REPO, env={**os.environ, **bake_env}).returncode != 0:
+            fail(f"building the image failed: {shlex.join(bake)}, output above")
     elif missing:
         fail(f"there is no image {image}: build it with docker/run --build, or drop --no-build")
     os.execvpe("docker", argv, {**os.environ, **env})
