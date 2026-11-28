@@ -26,7 +26,7 @@ release's `settings64.sh` first, or load its environment module.
 **FINN's container (recommended)**, on your own machine where you can use Docker:
 
 ```bash
-git clone https://github.com/Xilinx/finn.git
+git clone -b dev https://github.com/Xilinx/finn.git
 cd finn
 source /tools/Xilinx/2025.2/Vivado/settings64.sh   # your release; skip without AMD tools
 ./docker/run -- finn doctor                        # what FINN finds, and what it can run

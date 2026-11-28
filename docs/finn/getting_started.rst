@@ -78,7 +78,7 @@ start it with the script ``docker/run`` in that checkout.
 
 2. Clone FINN, and go into the checkout::
 
-     git clone https://github.com/Xilinx/finn.git
+     git clone -b dev https://github.com/Xilinx/finn.git
      cd finn
 
 3. Set up the AMD tools in your shell, and name your licence server if you use one.
@@ -193,7 +193,7 @@ no root access and no Docker.
 
 2. Clone FINN, and install its environment into ``.venv`` in the checkout::
 
-     git clone https://github.com/Xilinx/finn.git
+     git clone -b dev https://github.com/Xilinx/finn.git
      cd finn
      uv sync
 
