@@ -214,9 +214,10 @@ no root access and no Docker.
      finn doctor
      ./scripts/quicktest-local.sh vivado
 
-   Success: ``finn doctor`` reports as in `Checking the installation`_, and the script
-   ends with ``All validation tests passed!``. Without the AMD tools, the script skips
-   the simulation tests and says so.
+   With the AMD tools, the script runs cppsim and RTL simulation and takes about half an
+   hour. Success: ``finn doctor`` reports as in `Checking the installation`_, and the
+   script ends with ``All validation tests passed!``. Without the AMD tools, the script
+   skips the simulation tests, says so, and takes about a minute.
 
 Each time you open a new shell, go into the checkout, activate the environment and set up
 the AMD tools again. ``docker/README.md`` in the checkout describes the environment in more
