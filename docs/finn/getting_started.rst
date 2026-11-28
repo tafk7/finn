@@ -37,7 +37,7 @@ Terms used below
 * **settings64.sh** is the script each release installs, for example
   ``/tools/Xilinx/2025.2/Vivado/settings64.sh``. Sourcing it (``source …/settings64.sh``)
   sets up that release's tools in your shell: it puts them on your ``PATH`` and sets
-  ``XILINX_VIVADO``. FINN reads that setup, natively and in the container.
+  ``XILINX_VIVADO``. FINN reads that setup, with or without Docker.
 * An **environment module** is how many shared servers and clusters offer the AMD tools
   instead: ``module load vivado/2025.2`` or similar. Loading the module does what
   sourcing ``settings64.sh`` does. Ask your administrator for its name.
@@ -238,7 +238,7 @@ Vivado 2025.2 set up, the end of its report reads::
     --    Alveo builds: needs PLATFORM_REPO_PATHS, XILINX_XRT
 
 Without the AMD tools, only the first line starts with ``ok``. Each other line says what
-it needs. Natively, the ``AMD tools`` section also names the ``settings64.sh`` of a release
+it needs. Without Docker, the ``AMD tools`` section also names the ``settings64.sh`` of a release
 it finds installed under ``/tools/Xilinx``, ``/opt/Xilinx`` or ``~/Xilinx``. A build step that
 needs a tool says the same.
 
@@ -259,7 +259,7 @@ Vivado/Vitis licence
 ********************
 
 If you target FPGA parts that need a licence (outside the free Standard edition), set
-AMD's licence variable before you start FINN, natively or with ``docker/run``. The
+AMD's licence variable before you start FINN, with or without Docker. The
 container mounts a licence file at the same path::
 
   export XILINXD_LICENSE_FILE=2100@licence-server      # or /path/to/licence.lic
@@ -443,7 +443,7 @@ Start on the target side:
 
 Continue on the host side (replace the ``<PYNQ_IP>`` and ``<PYNQ_USERNAME>`` with the IP address and username of your board from the first step):
 
-1. Natively, use your own ``~/.ssh``. For the container, create the ``ssh_keys`` directory where you cloned finn (``mkdir ssh_keys``), which the container mounts as its ``~/.ssh``
+1. Without Docker, use your own ``~/.ssh``. For the container, create the ``ssh_keys`` directory where you cloned finn (``mkdir ssh_keys``), which the container mounts as its ``~/.ssh``
 2. Go into that directory (e.g. ``cd ~/.ssh`` or ``cd /path/to/finn/ssh_keys``)
 3. Run ``ssh-keygen`` to create a key pair e.g. ``id_rsa`` private and ``id_rsa.pub`` public key
 4. Run ``ssh-copy-id -i id_rsa.pub <PYNQ_USERNAME>@<PYNQ_IP>`` to install the keys on the remote system
@@ -467,9 +467,9 @@ On the target side:
 On the host side:
 
 1. Install Vitis 2024.2 or later and source its ``settings64.sh``, which sets ``XILINX_VITIS``.
-2. Natively, install Xilinx XRT on the host and source its ``setup.sh``; FINN's container gets its pinned XRT userspace with ``./docker/run --runtime xrt`` instead.
+2. Without Docker, install Xilinx XRT on the host and source its ``setup.sh``; FINN's container gets its pinned XRT userspace with ``./docker/run --runtime xrt`` instead.
 3. Install the Vitis platform files for Alveo and set up the ``PLATFORM_REPO_PATHS`` environment variable to point to your installation. *This must be the same path as the target's platform files (target step 2)*
-4. `Set up public key authentication <https://www.digitalocean.com/community/tutorials/how-to-configure-ssh-key-based-authentication-on-a-linux-server>`_. Natively the key in your ``~/.ssh`` serves; for the container, copy your private key to the ``finn/ssh_keys`` folder on the host to get password-less deployment and remote execution.
+4. `Set up public key authentication <https://www.digitalocean.com/community/tutorials/how-to-configure-ssh-key-based-authentication-on-a-linux-server>`_. Without Docker, the key in your ``~/.ssh`` serves; for the container, copy your private key to the ``finn/ssh_keys`` folder on the host to get password-less deployment and remote execution.
 5. Done!
 
 Slash-based Alveo first-time setup
@@ -494,12 +494,12 @@ On the host side:
 
 1. Build the ``slashkit`` Debian package from the `Slash GitHub repository
    <https://github.com/Xilinx/slash>`_ and copy it to a location accessible on the host.
-2. Natively, install the Slash packages on the host. For the container, supply
+2. Without Docker, install the Slash packages on the host. For the container, supply
    the packages named by ``docker/runtimes/slash.env`` and
    ``docker/runtimes/slashkit.env`` under ``docker/packages/``, and select them with
    ``./docker/run --runtime xrt,slash,slashkit``, which builds that image.
 3. `Set up public key authentication <https://www.digitalocean.com/community/tutorials/how-to-configure-ssh-key-based-authentication-on-a-linux-server>`_.
-   Natively the key in your ``~/.ssh`` serves; for the container, copy your private key
+   Without Docker, the key in your ``~/.ssh`` serves; for the container, copy your private key
    to the ``finn/ssh_keys`` folder on the host to get password-less deployment and
    remote execution.
 4. Done!

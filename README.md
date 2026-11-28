@@ -55,7 +55,7 @@ the installation, and how to install from a checkout for the notebooks and tests
 
 ## Documentation
 
-You can view the documentation on [readthedocs](https://finn.readthedocs.io). Additionally, there is a series of [Jupyter notebook tutorials](https://github.com/Xilinx/finn/tree/main/notebooks), which run from a checkout, natively or in the container.
+You can view the documentation on [readthedocs](https://finn.readthedocs.io). Additionally, there is a series of [Jupyter notebook tutorials](https://github.com/Xilinx/finn/tree/main/notebooks), which run from a checkout, with or without Docker.
 
 ## Community
 

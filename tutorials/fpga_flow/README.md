@@ -24,13 +24,13 @@ This demo was created using Vivado 2024.2.
 ### Running FINN Compiler
 
 Prior to running, insure the following prerequisites have been met:
-- Install FINN from a checkout of its repository, natively or as its container; the tutorial is in the checkout. The [Getting Started](https://finn.readthedocs.io/en/latest/getting_started.html#install-finn) section of the FINN documentation describes both.
+- Install FINN from a checkout of its repository, without Docker or as its container; the tutorial is in the checkout. The [Getting Started](https://finn.readthedocs.io/en/latest/getting_started.html#install-finn) section of the FINN documentation describes both.
 - Source your Xilinx release's settings, for example:
 ```shell
 source /tools/Xilinx/2025.2/Vivado/settings64.sh
 ```
 
-Then, change to the tutorial's directory in your checkout (`/path/to/finn` below) and invoke the build, natively in the activated environment:
+Then, change to the tutorial's directory in your checkout (`/path/to/finn` below) and invoke the build, without Docker in the activated environment:
 ```shell
 cd /path/to/finn/tutorials/fpga_flow
 python build.py

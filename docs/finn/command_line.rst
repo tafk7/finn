@@ -53,7 +53,7 @@ To use it, first create a folder with the necessary configuration and model file
    Instead of specifying the folding configuration, you can use the `target_fps` option in the build configuration
    to control the degree of parallelization for your network.
 
-Now you can invoke the simple dataflow build as follows, natively or in FINN's container:
+Now you can invoke the simple dataflow build as follows, without Docker or in FINN's container:
 
 ::
 
@@ -266,7 +266,7 @@ calling the steps from the simple dataflow build mode above,
 making calls to FINN library functions, preprocessing and altering models, building several variants etc.
 You can find a basic example of a build flow under ``src/finn/qnn-data/build_dataflow/build.py``.
 
-You can launch the desired custom build flow from that folder, natively or in FINN's container, using:
+You can launch the desired custom build flow from that folder, without Docker or in FINN's container, using:
 
 ::
 

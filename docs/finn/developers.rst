@@ -89,7 +89,7 @@ and ``ci/README.md`` for the full variable list, migration and validation contra
 You can relaunch the generated scripts and projects for FINN's HLS IP and stitched-IP folders yourself,
 for instance to inspect the designs in the Vivado GUI.
 Generated scripts name FINN's sources (finn-rtllib, finn-hlslib and the other resources) by absolute path.
-Natively they run as they are, in a shell that sourced the same release; and since
+Without Docker they run as they are, in a shell that sourced the same release; and since
 ``docker/run`` mounts the checkout, ``FINN_HOME`` and the build directory at their host paths, the .tcl scripts and
 .xpr project files of a container build can be launched on the host as they are too.
 
@@ -99,7 +99,7 @@ Linting
 We use a pre-commit hook to auto-format Python code and check for issues.
 See https://pre-commit.com/ for installation. Once you have pre-commit, you can install
 the hooks into your local clone of the FINN repo.
-The locked environment (``uv sync``) includes pre-commit. Install the hooks natively,
+The locked environment (``uv sync``) includes pre-commit. Install the hooks
 **on the host**, rather than inside the container:
 
 ::

@@ -40,7 +40,7 @@ What is the expected background for using FINN?
     should be necessary, although having some knowledge would give better results.
 
 What operating systems are supported by FINN?
-    Linux on x86-64. FINN runs natively on a distribution that provides Python 3.12 and
+    Linux on x86-64. FINN runs without Docker on a distribution that provides Python 3.12 and
     can run Vivado/Vitis; FINN's container and CI use Ubuntu 24.04, and the container runs
     on any Linux with Docker.
 
