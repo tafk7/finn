@@ -23,26 +23,27 @@ FINN is a Python package for Linux. It uses the AMD tools (Vivado and Vitis HLS,
 or later) for synthesis and simulation, from the shell you start it in: source your
 release's `settings64.sh` first, or load its environment module.
 
-**FINN's container (recommended)**, on your own machine where you can use Docker:
-
-```bash
-git clone -b dev https://github.com/Xilinx/finn.git
-cd finn
-source /tools/Xilinx/2025.2/Vivado/settings64.sh   # your release; skip without AMD tools
-./docker/run -- finn doctor                        # what FINN finds, and what it can run
-./docker/run                                       # a shell in the container
-```
-
-**Without Docker**, on a shared server, a cluster or any machine where you have no root
-access or no Docker. Install [uv](https://docs.astral.sh/uv/) first; everything goes into
-your home directory:
+**With uv (recommended)**: FINN installs as a Python package into your home directory,
+with no root access and no Docker, on your own machine, a shared server or a cluster.
+Install [uv](https://docs.astral.sh/uv/) first:
 
 ```bash
 uv venv --python 3.12 finn-env
 source finn-env/bin/activate
 uv pip install --torch-backend cpu "finn[brevitas] @ git+https://github.com/Xilinx/finn.git@dev"
 source /tools/Xilinx/2025.2/Vivado/settings64.sh   # your release; skip without AMD tools
-finn doctor
+finn doctor                                        # what FINN finds, and what it can run
+```
+
+**FINN's container**, if you prefer Docker, want the environment FINN's own tests run in,
+or build for Alveo cards without installing XRT yourself:
+
+```bash
+git clone -b dev https://github.com/Xilinx/finn.git
+cd finn
+source /tools/Xilinx/2025.2/Vivado/settings64.sh   # your release; skip without AMD tools
+./docker/run -- finn doctor
+./docker/run                                       # a shell in the container
 ```
 
 The [Getting Started](https://finn.readthedocs.io/en/latest/getting_started.html) page

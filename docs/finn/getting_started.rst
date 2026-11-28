@@ -18,16 +18,19 @@ Install FINN
 Choose how to install
 *********************
 
-There are three ways. Pick the first one that fits your machine.
+There are three ways. Most users install FINN with uv.
 
-* **FINN's container (recommended).** Use this on your own Linux machine, where you
-  can use Docker. The container holds FINN and every package it needs, on Ubuntu 24.04,
-  exactly as FINN's own tests run it. See `Install FINN's container`_.
-* **Without Docker.** Use this on a shared server, a cluster or a university
-  workstation, where you have no root access or no Docker. Everything installs in your
-  home directory. See `Install FINN without Docker`_.
-* **From a checkout, without Docker.** Use this to run the notebooks and the tests
-  without Docker, or to work on FINN itself. See `Install from a checkout`_.
+* **With uv (recommended).** FINN installs as a Python package, into an environment in
+  your home directory. It needs no root access and no Docker, so it works the same on
+  your own Linux machine, a shared server, a cluster or a university workstation. See
+  `Install FINN with uv`_.
+* **From a checkout.** Use this to run the notebook tutorials and the tests, or to work
+  on FINN itself. It installs the exact package versions FINN is tested with. See
+  `Install from a checkout`_.
+* **FINN's container.** Use this if you prefer Docker, if you want the exact environment
+  FINN's own tests run in (Ubuntu 24.04), or to build for Alveo cards without installing
+  XRT yourself. It needs Docker that you can use without ``sudo``. See
+  `Install FINN's container`_.
 
 Terms used below
 ****************
@@ -51,77 +54,16 @@ Terms used below
 On a shared machine: what to ask your administrator for
 *******************************************************
 
-* **For the container:** permission to use Docker without ``sudo`` (membership of the
-  ``docker`` group, or rootless Docker). If that is not possible, install FINN without
-  Docker instead.
 * **For synthesis and simulation:** an installed AMD release, 2024.2 or later, and how
   to set it up: the path of its ``settings64.sh``, or the name of its environment module.
 * **For parts that need a licence:** the licence server, as ``port@host``.
-* **Without Docker:** ``g++`` and ``git``. Most servers have both; check with
+* **For FINN itself:** ``g++`` and ``git``. Most servers have both; check with
   ``g++ --version`` and ``git --version``.
+* **Only for the container:** permission to use Docker without ``sudo`` (membership of
+  the ``docker`` group, or rootless Docker). You do not need it to install FINN with uv.
 
-Install FINN's container
-************************
-
-The container needs Docker on your machine, and a checkout of FINN's repository. You
-start it with the script ``docker/run`` in that checkout.
-
-1. Install Docker, then set it up so that you can use it without ``sudo``, as described
-   in `Docker's post-installation steps <https://docs.docker.com/engine/install/linux-postinstall/#manage-docker-as-a-non-root-user>`_.
-   Check it::
-
-     docker run --rm hello-world
-
-   Success: the output starts with ``Hello from Docker!``.
-   If it says ``permission denied``, you cannot use Docker without ``sudo`` yet: log out
-   and in again after the post-installation steps, or ask your administrator.
-
-2. Clone FINN, and go into the checkout::
-
-     git clone -b dev https://github.com/Xilinx/finn.git
-     cd finn
-
-3. Set up the AMD tools in your shell, and name your licence server if you use one.
-   The container takes both from your shell::
-
-     source /tools/Xilinx/2025.2/Vivado/settings64.sh
-     export XILINXD_LICENSE_FILE=2100@licence-server
-
-   Use the path of your own release, or load its environment module instead. Skip this
-   step if you do not have the AMD tools yet.
-
-4. Check what FINN finds::
-
-     ./docker/run -- finn doctor
-
-   The first run builds the container's image, which takes some minutes.
-   Success: the report ends with a list under ``FINN can run``. With the AMD tools set
-   up, every line but ``Alveo builds`` starts with ``ok``. See `Checking the installation`_.
-
-   If it fails:
-
-   * ``docker/run: docker is not installed`` or ``cannot use the Docker daemon``: go back
-     to step 1, or install FINN without Docker.
-   * The image build fails because ``buildx`` is unknown: install Docker Buildx
-     (``docker-buildx-plugin`` from Docker's packages, ``docker-buildx`` from Ubuntu's).
-
-5. Verify the installation with a few tests::
-
-     ./docker/run --fpga -- bash docker/quicktest.sh verify
-
-   This runs cppsim and RTL simulation and takes about half an hour. It is normal to see
-   warnings during the tests: FINN uses warnings to inform users about certain conditions.
-   Success: the last lines read ``All validation tests passed!``.
-   If ``docker/run`` says ``--fpga needs the AMD tools``, go back to step 3. Without the
-   AMD tools, run ``./docker/run -- ./scripts/quicktest-local.sh`` instead: it checks
-   everything that needs no tools, in about a minute.
-
-``./docker/run`` on its own starts a shell in the container. See `Running FINN`_ for
-builds and notebooks, and `The container`_ for its options. Each time you open a new
-shell, repeat step 3 before you use the container.
-
-Install FINN without Docker
-***************************
+Install FINN with uv
+********************
 
 This installs FINN into a Python environment in your home directory. It needs no root
 access and no checkout of FINN's repository.
@@ -207,7 +149,7 @@ no root access and no Docker.
    The environment holds FINN, Brevitas, the CPU build of PyTorch, Jupyter, and the
    tools for tests and documentation.
 
-4. Set up the AMD tools as in step 4 of `Install FINN without Docker`_.
+4. Set up the AMD tools as in step 4 of `Install FINN with uv`_.
 
 5. Check and verify the installation::
 
@@ -222,6 +164,66 @@ no root access and no Docker.
 Each time you open a new shell, go into the checkout, activate the environment and set up
 the AMD tools again. ``docker/README.md`` in the checkout describes the environment in more
 depth: updating packages, a GPU build of PyTorch, and every variable FINN reads.
+
+Install FINN's container
+************************
+
+The container needs Docker on your machine, and a checkout of FINN's repository. You
+start it with the script ``docker/run`` in that checkout.
+
+1. Install Docker, then set it up so that you can use it without ``sudo``, as described
+   in `Docker's post-installation steps <https://docs.docker.com/engine/install/linux-postinstall/#manage-docker-as-a-non-root-user>`_.
+   Check it::
+
+     docker run --rm hello-world
+
+   Success: the output starts with ``Hello from Docker!``.
+   If it says ``permission denied``, you cannot use Docker without ``sudo`` yet: log out
+   and in again after the post-installation steps, or ask your administrator.
+
+2. Clone FINN, and go into the checkout::
+
+     git clone -b dev https://github.com/Xilinx/finn.git
+     cd finn
+
+3. Set up the AMD tools in your shell, and name your licence server if you use one.
+   The container takes both from your shell::
+
+     source /tools/Xilinx/2025.2/Vivado/settings64.sh
+     export XILINXD_LICENSE_FILE=2100@licence-server
+
+   Use the path of your own release, or load its environment module instead. Skip this
+   step if you do not have the AMD tools yet.
+
+4. Check what FINN finds::
+
+     ./docker/run -- finn doctor
+
+   The first run builds the container's image, which takes some minutes.
+   Success: the report ends with a list under ``FINN can run``. With the AMD tools set
+   up, every line but ``Alveo builds`` starts with ``ok``. See `Checking the installation`_.
+
+   If it fails:
+
+   * ``docker/run: docker is not installed`` or ``cannot use the Docker daemon``: go back
+     to step 1, or install FINN with uv instead (`Install FINN with uv`_).
+   * The image build fails because ``buildx`` is unknown: install Docker Buildx
+     (``docker-buildx-plugin`` from Docker's packages, ``docker-buildx`` from Ubuntu's).
+
+5. Verify the installation with a few tests::
+
+     ./docker/run --fpga -- bash docker/quicktest.sh verify
+
+   This runs cppsim and RTL simulation and takes about half an hour. It is normal to see
+   warnings during the tests: FINN uses warnings to inform users about certain conditions.
+   Success: the last lines read ``All validation tests passed!``.
+   If ``docker/run`` says ``--fpga needs the AMD tools``, go back to step 3. Without the
+   AMD tools, run ``./docker/run -- ./scripts/quicktest-local.sh`` instead: it checks
+   everything that needs no tools, in about a minute.
+
+``./docker/run`` on its own starts a shell in the container. See `Running FINN`_ for
+builds and notebooks, and `The container`_ for its options. Each time you open a new
+shell, repeat step 3 before you use the container.
 
 Checking the installation
 *************************
