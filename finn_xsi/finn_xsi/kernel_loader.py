@@ -8,12 +8,18 @@ cannot find them by name. Loading each one by its full path, dependencies first,
 makes the later load by name (the kernel, and each design's xsimk.so that needs it)
 reuse them. A design may need more of them than the kernel does (an IP-integrator
 design, libxv_simbridge_kernel.so). Only libraries in that directory are loaded; the
-system's own are left to the dynamic loader."""
+system's own are left to the dynamic loader.
+
+Vivado also ships libraries the process may already have its own copy of: Python's
+hashlib loads the system's libcrypto.so.3. A library loaded later binds to that copy
+by name, so Vivado 2024.2's libssl.so.3, built against OpenSSL 3.1, cannot load over
+a system's 3.0. Such a library comes from the system too where it has one, as it did
+with the system's directories first on LD_LIBRARY_PATH."""
 import ctypes
 import functools
 import os
 import struct
-from typing import List
+from typing import Dict, List, Set
 
 _PT_LOAD, _PT_DYNAMIC = 1, 2
 _DT_NULL, _DT_NEEDED, _DT_STRTAB = 0, 1, 5
@@ -54,14 +60,38 @@ def needed(path: str) -> List[str]:
     return []
 
 
-def _load(lib_dir: str, name: str, loaded: set) -> None:
+_MODE = os.RTLD_GLOBAL | os.RTLD_LAZY
+_from_vivado: Set[str] = set()
+
+
+def _present(name: str) -> bool:
+    try:
+        ctypes.CDLL(name, mode=_MODE | os.RTLD_NOLOAD)
+    except OSError:
+        return False
+    return True
+
+
+def _load(lib_dir: str, name: str, loaded: Dict[str, bool]) -> bool:
+    """Load ``name`` from ``lib_dir``, dependencies first; return whether the process
+    uses a copy from elsewhere instead."""
     path = os.path.join(lib_dir, name)
     if name in loaded or not os.path.isfile(path):
-        return
-    loaded.add(name)
-    for dependency in needed(path):
-        _load(lib_dir, dependency, loaded)
-    ctypes.CDLL(path, mode=os.RTLD_GLOBAL | os.RTLD_LAZY)
+        return loaded.get(name, False)
+    loaded[name] = name not in _from_vivado and _present(name)
+    if loaded[name]:
+        return True
+    elsewhere = [dependency for dependency in needed(path) if _load(lib_dir, dependency, loaded)]
+    if elsewhere:
+        try:
+            ctypes.CDLL(name, mode=_MODE)
+            loaded[name] = True
+            return True
+        except OSError:
+            pass
+    ctypes.CDLL(path, mode=_MODE)
+    _from_vivado.add(name)
+    return False
 
 
 @functools.lru_cache(maxsize=None)
@@ -69,7 +99,7 @@ def load_needed(vivado: str, path: str) -> int:
     """Load the libraries from ``<vivado>/lib/lnx64.o`` that the shared object ``path``
     (a design's xsimk.so) needs, dependencies first; return how many."""
     lib_dir = os.path.join(vivado, "lib", "lnx64.o")
-    loaded = set()
+    loaded: Dict[str, bool] = {}
     for name in needed(path):
         _load(lib_dir, name, loaded)
     return len(loaded)
@@ -79,6 +109,6 @@ def load_needed(vivado: str, path: str) -> int:
 def load_kernel(vivado: str, kernel: str) -> int:
     """Load ``kernel`` from ``<vivado>/lib/lnx64.o`` with the libraries it needs from
     there; return how many were loaded. Once per process and installation."""
-    loaded = set()
+    loaded: Dict[str, bool] = {}
     _load(os.path.join(vivado, "lib", "lnx64.o"), kernel, loaded)
     return len(loaded)

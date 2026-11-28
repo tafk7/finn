@@ -18,6 +18,8 @@ if _XSI_ROOT not in sys.path:
 
 from finn_xsi.kernel_loader import needed  # noqa: E402
 
+from finn_xsi import kernel_loader  # noqa: E402
+
 pytestmark = pytest.mark.util
 
 
@@ -76,3 +78,41 @@ def test_a_design_library_loads_without_ld_library_path():
     )
     assert proc.returncode == 0, proc.stderr
     assert int(proc.stdout) > 1
+
+
+def test_a_library_over_a_copy_the_process_has_comes_from_the_system(tmp_path, monkeypatch):
+    """The system's libcrypto.so.3 is loaded (Python's hashlib): Vivado's libssl.so.3,
+    which needs a newer one, is taken from the system too; Vivado's own libraries load
+    by path."""
+    deps = {
+        "libkernel.so": ["libssl.so.3", "libtool.so", "libc.so.6"],
+        "libssl.so.3": ["libcrypto.so.3", "libc.so.6"],
+        "libcrypto.so.3": ["libc.so.6"],
+        "libtool.so": ["libc.so.6"],
+    }
+    for name in deps:
+        (tmp_path / name).write_bytes(b"")
+    calls = []
+
+    def cdll(name, mode=0):
+        # The system has libssl.so.3 and libcrypto.so.3, and the process has the latter.
+        if name not in (
+            ("libcrypto.so.3",) if mode & os.RTLD_NOLOAD else ("libssl.so.3", "libcrypto.so.3")
+        ):
+            if "/" not in name:
+                raise OSError(name)
+        if not mode & os.RTLD_NOLOAD:
+            calls.append(name)
+
+    monkeypatch.setattr(kernel_loader, "needed", lambda path: deps[os.path.basename(path)])
+    monkeypatch.setattr(kernel_loader.ctypes, "CDLL", cdll)
+    monkeypatch.setattr(kernel_loader, "_from_vivado", set())
+    loaded = {}
+    kernel_loader._load(str(tmp_path), "libkernel.so", loaded)
+    assert calls == ["libssl.so.3", str(tmp_path / "libtool.so"), str(tmp_path / "libkernel.so")]
+    assert loaded == {
+        "libkernel.so": False,
+        "libssl.so.3": True,
+        "libcrypto.so.3": True,
+        "libtool.so": False,
+    }
