@@ -125,7 +125,7 @@ sourced your release's ``settings64.sh``. The host needs only Docker and the AMD
     ./docker/run --fpga -- bash docker/quicktest.sh verify
 
    The first ``docker/run`` builds the image, which takes some minutes. ``verify`` runs
-   a few tests, including cppsim and RTL simulation, and takes about 20 minutes. It is
+   a few tests, including cppsim and RTL simulation, and takes about half an hour. It is
    normal to see warnings during the tests: FINN uses warnings to inform users about
    certain conditions. As long as all tests pass, your installation is successful.
    Without the AMD tools, ``./docker/run -- ./scripts/quicktest-local.sh`` runs the
@@ -150,7 +150,7 @@ report reads::
     --    stitched IP, Zynq and Versal bitfiles: needs Vivado
     --    Alveo builds: needs Vitis, PLATFORM_REPO_PATHS, XILINX_XRT
 
-and it names the ``settings64.sh`` of the newest release installed under
+and, natively, it names the ``settings64.sh`` of the newest release installed under
 ``/tools/Xilinx``, ``/opt/Xilinx`` or ``~/Xilinx``. A build step that needs a tool
 says the same. ``finn doctor`` exits 1 only for a broken environment, such as tools
 of two releases.
