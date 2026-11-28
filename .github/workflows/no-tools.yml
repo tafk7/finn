@@ -2,7 +2,8 @@ name: NoTools
 
 # FINN installed from its wheel, without the AMD tools: what a pip user without
 # Vivado gets. finn doctor reports and passes, a step that needs a tool says what to
-# source, and the tests that need no tool pass against the installed package.
+# source, and the tests that need no tool pass against the installed package. The
+# documentation builds as Read the Docs builds it, without warnings.
 
 on:
   pull_request:
@@ -108,3 +109,27 @@ jobs:
           pytest -c "$GITHUB_WORKSPACE/pyproject.toml" --rootdir "$GITHUB_WORKSPACE" \
             "$GITHUB_WORKSPACE/tests" -p no:cacheprovider --dist=loadgroup -n auto \
             -m 'brevitas_export or streamline or transform'
+
+  docs:
+    name: Documentation, as Read the Docs builds it
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # .readthedocs.yaml's install, into a venv of its own as RTD's
+      - name: The docs group
+        run: |
+          python -m venv ../docs-env
+          ../docs-env/bin/python -m pip install uv==0.10.0
+          UV_PROJECT_ENVIRONMENT=$GITHUB_WORKSPACE/../docs-env ../docs-env/bin/uv sync --locked --inexact --no-default-groups --group docs
+
+      - name: Sphinx, warnings as errors
+        working-directory: docs/finn
+        run: |
+          ../../../docs-env/bin/python -m sphinx -T -W --keep-going -b html -d ../../../docs-out/doctrees . ../../../docs-out/html
