@@ -62,7 +62,7 @@ Environment and container
 ``pyproject.toml`` declares Python dependencies and groups; ``uv.lock`` records
 exact versions and Git selections. Use uv 0.10.0 for updates and commit both
 files. All groups resolve together. Run ``uv sync --locked`` for development
-(see :ref:`getting_started:From a checkout, with the locked environment`).
+(see :ref:`getting_started:Install from a checkout`).
 
 ``docker buildx bake`` builds the image (``docker/Dockerfile``: Ubuntu 24.04,
 Python 3.12 and the locked dependencies; runtimes such as XRT on request; a

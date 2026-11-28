@@ -4,175 +4,263 @@
 Getting Started
 ***************
 
-FINN is a Python package. It runs natively, in a Python environment, or in FINN's
-container. Either way it uses the AMD tools (Vivado, Vitis HLS, Vitis) of the shell it
-starts in, as every AMD tool does: source a release's ``settings64.sh`` first.
-Without the tools FINN still imports, transforms and estimates models and generates
-code; synthesis and simulation need them.
+FINN is a Python package. You install it once, then you use it from a shell, a Python
+script or a Jupyter notebook.
+
+FINN uses the AMD tools (Vivado, Vitis HLS and Vitis) for synthesis and simulation.
+It does not install them. It uses the release that your shell has set up, as every
+AMD tool does. Without the AMD tools, FINN still imports, transforms and estimates
+models, and generates code.
 
 Install FINN
 ============
 
-There are two ways to install FINN: into a Python environment, or as FINN's container.
-Both end with ``finn doctor``, which reports what FINN finds and what it can run.
+Choose how to install
+*********************
 
-Requirements
-************
+There are three ways. Pick the first one that fits your machine.
 
-* Linux on x86-64. FINN's container and CI use Ubuntu 24.04; natively, other
-  distributions work when they provide the packages below.
-* Natively: Python 3.12 or later, ``git``, and ``g++`` with the Python headers for
-  cppsim and RTL simulation (on Ubuntu, ``sudo apt install build-essential git python3-dev``,
-  or ``sudo ./scripts/install-system-deps.sh`` in a checkout).
-* For the container: Docker, set up to run `without root <https://docs.docker.com/engine/install/linux-postinstall/#manage-docker-as-a-non-root-user>`_.
-  The container brings everything else.
-* For synthesis and simulation: AMD Vivado and Vitis HLS 2024.2 or later, Vitis for
-  Alveo builds, and a `licence <Vivado/Vitis licence_>`_ for parts that need one.
-  See `Hardware recommendations`_ for memory, cores and disk space.
+* **FINN's container (recommended).** Use this on your own Linux machine, where you
+  can use Docker. The container holds FINN and every package it needs, on Ubuntu 24.04,
+  exactly as FINN's own tests run it. See `Install FINN's container`_.
+* **Without Docker.** Use this on a shared server, a cluster or a university
+  workstation, where you have no root access or no Docker. Everything installs in your
+  home directory. See `Install FINN without Docker`_.
+* **From a checkout, without Docker.** Use this to run the notebooks and the tests
+  without Docker, or to work on FINN itself. See `Install from a checkout`_.
 
-Install into a Python environment
-*********************************
+Terms used below
+****************
 
-This installs FINN's compiler, its ``build_dataflow`` command and its Python API,
-without a checkout of the repository.
+* An AMD **release** is one version of the AMD tools, such as 2025.2. FINN needs
+  Vivado and Vitis HLS 2024.2 or later; Alveo builds also need Vitis.
+* **settings64.sh** is the script each release installs, for example
+  ``/tools/Xilinx/2025.2/Vivado/settings64.sh``. Sourcing it (``source …/settings64.sh``)
+  sets up that release's tools in your shell: it puts them on your ``PATH`` and sets
+  ``XILINX_VIVADO``. FINN reads that setup, natively and in the container.
+* An **environment module** is how many shared servers and clusters offer the AMD tools
+  instead: ``module load vivado/2025.2`` or similar. Loading the module does what
+  sourcing ``settings64.sh`` does. Ask your administrator for its name.
+* **XILINXD_LICENSE_FILE** is AMD's variable for your licence: a licence server as
+  ``port@host`` (for example ``2100@licence-server``), or the path of a licence file.
+  Many smaller parts need no licence; see `Vivado/Vitis licence`_.
+* `uv <https://docs.astral.sh/uv/>`_ is a tool that creates Python environments and
+  installs packages into them. It installs into your home directory, without root, and
+  can fetch Python itself.
 
-1. Make a Python 3.12 environment and install FINN into it. ``[brevitas]`` adds the
-   PyTorch front end used to train and export models (Brevitas); without it, FINN
-   compiles QONNX models you already have::
+On a shared machine: what to ask your administrator for
+*******************************************************
 
-    uv venv --python 3.12 finn-env
-    source finn-env/bin/activate
-    uv pip install --torch-backend cpu "finn[brevitas] @ git+https://github.com/Xilinx/finn.git@dev"
-
-   `uv <https://docs.astral.sh/uv/getting-started/installation/>`_ fetches Python 3.12
-   if the system has none. FINN does not use CUDA, and ``--torch-backend cpu`` selects
-   the CPU build of PyTorch, a fraction of the size of the default build. pip works too:
-   ``python3.12 -m venv finn-env``, then ``pip install "finn[brevitas] @ git+https://github.com/Xilinx/finn.git@dev"``;
-   a distribution's Python needs its headers package as well (``python3.12-dev`` on
-   Ubuntu) for RTL simulation.
-
-2. Source a release's settings, or load your site's Vivado module, and name your
-   licence server if you use one::
-
-    source /tools/Xilinx/2025.2/Vivado/settings64.sh
-    export XILINXD_LICENSE_FILE=2100@licence-server
-
-   One FINN process uses one release; to switch, source another release's
-   ``settings64.sh`` in a new shell.
-
-3. Check what FINN finds and what it can run (see `Checking the installation`_)::
-
-    finn doctor
-
-To use FINN in a new shell, activate the environment and source the release's
-``settings64.sh`` again.
-
-From a checkout, with the locked environment
---------------------------------------------
-
-The notebooks, the tests and work on FINN itself use a checkout of the repository,
-with the exact dependency versions recorded in its ``uv.lock``:
-
-1. Install uv 0.10.0, the version the checkout requires
-   (``curl -LsSf https://astral.sh/uv/0.10.0/install.sh | sh``, or
-   ``uv self update 0.10.0`` for an installed uv). Another version stops with an error
-   that names this one.
-
-2. Clone FINN and install its locked environment into ``.venv``::
-
-    git clone https://github.com/Xilinx/finn.git
-    cd finn
-    uv sync
-    source .venv/bin/activate
-
-   uv uses Python 3.12 (``.python-version``) and fetches it if the system has none;
-   ``uv sync --python /path/to/python3.12`` names an interpreter. Instead of activating
-   the environment, you can prefix commands with ``uv run``.
-
-3. Source the AMD tools as in step 2 above, then check and verify the installation::
-
-    finn doctor
-    ./scripts/quicktest-local.sh          # imports and a few tests; needs no AMD tools
-    ./scripts/quicktest-local.sh vivado   # also cppsim and RTL simulation, with Vivado
-
-The environment holds FINN with Brevitas, the CPU build of PyTorch, Jupyter and the
-test and documentation tools. ``docker/README.md`` in the checkout covers the locked
-environment in more depth: dependency updates, a CUDA build of PyTorch, and where FINN
-keeps its files.
+* **For the container:** permission to use Docker without ``sudo`` (membership of the
+  ``docker`` group, or rootless Docker). If that is not possible, install FINN without
+  Docker instead.
+* **For synthesis and simulation:** an installed AMD release, 2024.2 or later, and how
+  to set it up: the path of its ``settings64.sh``, or the name of its environment module.
+* **For parts that need a licence:** the licence server, as ``port@host``.
+* **Without Docker:** ``g++`` and ``git``. Most servers have both; check with
+  ``g++ --version`` and ``git --version``.
 
 Install FINN's container
 ************************
 
-The container is FINN's locked environment on Ubuntu 24.04, started like a shell that
-sourced your release's ``settings64.sh``. The host needs only Docker and the AMD tools.
+The container needs Docker on your machine, and a checkout of FINN's repository. You
+start it with the script ``docker/run`` in that checkout.
 
-1. Install Docker and set it up to run `without root <https://docs.docker.com/engine/install/linux-postinstall/#manage-docker-as-a-non-root-user>`_.
+1. Install Docker, then set it up so that you can use it without ``sudo``, as described
+   in `Docker's post-installation steps <https://docs.docker.com/engine/install/linux-postinstall/#manage-docker-as-a-non-root-user>`_.
+   Check it::
 
-2. Clone FINN::
+     docker run --rm hello-world
 
-    git clone https://github.com/Xilinx/finn.git
-    cd finn
+   Success: the output starts with ``Hello from Docker!``.
+   If it says ``permission denied``, you cannot use Docker without ``sudo`` yet: log out
+   and in again after the post-installation steps, or ask your administrator.
 
-3. Source a release's settings and name your licence server, as natively; the
-   container takes both from your shell::
+2. Clone FINN, and go into the checkout::
 
-    source /tools/Xilinx/2025.2/Vivado/settings64.sh
-    export XILINXD_LICENSE_FILE=2100@licence-server
+     git clone https://github.com/Xilinx/finn.git
+     cd finn
 
-4. Check what FINN finds, then verify the installation::
+3. Set up the AMD tools in your shell, and name your licence server if you use one.
+   The container takes both from your shell::
 
-    ./docker/run -- finn doctor
-    ./docker/run --fpga -- bash docker/quicktest.sh verify
+     source /tools/Xilinx/2025.2/Vivado/settings64.sh
+     export XILINXD_LICENSE_FILE=2100@licence-server
 
-   The first ``docker/run`` builds the image, which takes some minutes. ``verify`` runs
-   a few tests, including cppsim and RTL simulation, and takes about half an hour. It is
-   normal to see warnings during the tests: FINN uses warnings to inform users about
-   certain conditions. As long as all tests pass, your installation is successful.
-   Without the AMD tools, ``./docker/run -- ./scripts/quicktest-local.sh`` runs the
-   checks that need none.
+   Use the path of your own release, or load its environment module instead. Skip this
+   step if you do not have the AMD tools yet.
 
-``./docker/run`` alone starts a shell in the container; see `Running FINN`_ for builds
-and notebooks, and `The container`_ for its options.
+4. Check what FINN finds::
+
+     ./docker/run -- finn doctor
+
+   The first run builds the container's image, which takes some minutes.
+   Success: the report ends with a list under ``FINN can run``. With the AMD tools set
+   up, every line but ``Alveo builds`` starts with ``ok``. See `Checking the installation`_.
+
+   If it fails:
+
+   * ``docker/run: docker is not installed`` or ``cannot use the Docker daemon``: go back
+     to step 1, or install FINN without Docker.
+   * The image build fails because ``buildx`` is unknown: install Docker Buildx
+     (``docker-buildx-plugin`` from Docker's packages, ``docker-buildx`` from Ubuntu's).
+
+5. Verify the installation with a few tests::
+
+     ./docker/run --fpga -- bash docker/quicktest.sh verify
+
+   This runs cppsim and RTL simulation and takes about half an hour. It is normal to see
+   warnings during the tests: FINN uses warnings to inform users about certain conditions.
+   Success: the last lines read ``All validation tests passed!``.
+   If ``docker/run`` says ``--fpga needs the AMD tools``, go back to step 3. Without the
+   AMD tools, run ``./docker/run -- ./scripts/quicktest-local.sh`` instead: it checks
+   everything that needs no tools, in about a minute.
+
+``./docker/run`` on its own starts a shell in the container. See `Running FINN`_ for
+builds and notebooks, and `The container`_ for its options. Each time you open a new
+shell, repeat step 3 before you use the container.
+
+Install FINN without Docker
+***************************
+
+This installs FINN into a Python environment in your home directory. It needs no root
+access and no checkout of FINN's repository.
+
+1. Install uv::
+
+     curl -LsSf https://astral.sh/uv/install.sh | sh
+
+   Success: ``uv --version`` prints a version. If your shell says
+   ``uv: command not found``, open a new shell, or add ``~/.local/bin`` to your ``PATH``.
+
+2. Create a Python 3.12 environment called ``finn-env``, and activate it::
+
+     uv venv --python 3.12 finn-env
+     source finn-env/bin/activate
+
+   uv downloads Python 3.12 if your system has none. Success: your prompt starts with
+   ``(finn-env)``.
+
+3. Install FINN::
+
+     uv pip install --torch-backend cpu "finn[brevitas] @ git+https://github.com/Xilinx/finn.git@dev"
+
+   ``[brevitas]`` adds Brevitas, the PyTorch library that trains and exports the
+   quantized models FINN compiles. Leave it out if you only compile QONNX models you
+   already have. ``--torch-backend cpu`` installs the CPU build of PyTorch: FINN does not
+   use a GPU, and with the default build the environment is about five times larger
+   (5 GB rather than 1 GB).
+   Success: uv ends with a list of installed packages, ``finn`` among them.
+
+4. Set up the AMD tools in your shell, and name your licence server if you use one::
+
+     source /tools/Xilinx/2025.2/Vivado/settings64.sh
+     export XILINXD_LICENSE_FILE=2100@licence-server
+
+   Use the path of your own release, or load its environment module instead. Skip this
+   step if you do not have the AMD tools yet. One shell uses one release: to switch,
+   open a new shell and set up the other release there.
+
+5. Check what FINN finds::
+
+     finn doctor
+
+   Success: as in `Checking the installation`_. If a line under ``Host`` reports no
+   ``g++`` or no Python headers, ask your administrator for ``g++``; uv's Python brings
+   its own headers.
+
+Each time you open a new shell, activate the environment and set up the AMD tools again
+(steps 2 and 4, without ``uv venv``).
+
+If you prefer pip to uv: ``python3.12 -m venv finn-env``, then
+``pip install "finn[brevitas] @ git+https://github.com/Xilinx/finn.git@dev"``. pip installs
+PyTorch's larger GPU build, and a distribution's Python needs its headers package as well
+(``python3.12-dev`` on Ubuntu) for RTL simulation.
+
+Install from a checkout
+***********************
+
+The notebooks and the tests live in FINN's repository. A checkout installs them, with the
+exact package versions FINN is tested with (recorded in its ``uv.lock`` file). It needs
+no root access and no Docker.
+
+1. Install uv 0.10.0, the version the checkout requires::
+
+     curl -LsSf https://astral.sh/uv/0.10.0/install.sh | sh
+
+   If you already have another version of uv, ``uv self update 0.10.0`` changes it.
+   Success: ``uv --version`` prints ``uv 0.10.0``.
+
+2. Clone FINN, and install its environment into ``.venv`` in the checkout::
+
+     git clone https://github.com/Xilinx/finn.git
+     cd finn
+     uv sync
+
+   Success: uv ends with a list of installed packages. If uv says
+   ``Required uv version `==0.10.0` does not match``, go back to step 1.
+
+3. Activate the environment::
+
+     source .venv/bin/activate
+
+   The environment holds FINN, Brevitas, the CPU build of PyTorch, Jupyter, and the
+   tools for tests and documentation.
+
+4. Set up the AMD tools as in step 4 of `Install FINN without Docker`_.
+
+5. Check and verify the installation::
+
+     finn doctor
+     ./scripts/quicktest-local.sh vivado
+
+   Success: ``finn doctor`` reports as in `Checking the installation`_, and the script
+   ends with ``All validation tests passed!``. Without the AMD tools, the script skips
+   the simulation tests and says so.
+
+Each time you open a new shell, go into the checkout, activate the environment and set up
+the AMD tools again. ``docker/README.md`` in the checkout describes the environment in more
+depth: updating packages, a GPU build of PyTorch, and every variable FINN reads.
 
 Checking the installation
 *************************
 
-``finn doctor`` reports, and changes nothing: the AMD release in the environment and
-whether its tools agree, the compiler and Python headers, licence settings, FINN's
-resources, and what FINN can run with what is set up. Without AMD tools, the end of its
-report reads::
+``finn doctor`` reports what FINN finds, and changes nothing. It lists the AMD release in
+your shell, the compiler, licence settings, FINN's resources, and what FINN can run. With
+Vivado 2025.2 set up, the end of its report reads::
 
   FINN can run
     ok    transformations, estimates, code generation
-    --    cppsim: needs Vitis HLS headers and g++
-    --    HLS synthesis: needs Vitis HLS
-    --    rtlsim: needs Vivado, and g++ with Python headers to build the XSim binding
-    --    stitched IP, Zynq and Versal bitfiles: needs Vivado
-    --    Alveo builds: needs Vitis, PLATFORM_REPO_PATHS, XILINX_XRT
+    ok    cppsim
+    ok    HLS synthesis
+    ok    rtlsim
+    ok    stitched IP, Zynq and Versal bitfiles
+    --    Alveo builds: needs PLATFORM_REPO_PATHS, XILINX_XRT
 
-and, natively, it names the ``settings64.sh`` of the newest release installed under
-``/tools/Xilinx``, ``/opt/Xilinx`` or ``~/Xilinx``. A build step that needs a tool
-says the same. ``finn doctor`` exits 1 only for a broken environment, such as tools
-of two releases.
+Without the AMD tools, only the first line starts with ``ok``. Each other line says what
+it needs. Natively, the ``AMD tools`` section also names the ``settings64.sh`` of a release
+it finds installed under ``/tools/Xilinx``, ``/opt/Xilinx`` or ``~/Xilinx``. A build step that
+needs a tool says the same.
 
-FINN fetches finn-hlslib, board files and its other resources into ``~/.finn`` the
-first time a build needs them, and builds its XSim binding for the sourced Vivado
-the first time it simulates RTL. ``finn resources fetch --all`` fetches every
-resource ahead of offline use, and ``python -m finn.xsi.setup`` prebuilds the
-binding.
+``finn doctor`` exits with an error only when the setup is broken, for example when your
+shell has tools from two releases. Open a new shell, set up one release, and run it again.
 
-``finn doctor`` also lists what FINN knows about the sourced release that its
-installation does not show: a release's own behaviour and what FINN does about it.
-With Vitis 2026.2, for example, ``settings64.sh`` makes every Python load an older
-C++ runtime, so extensions you compile yourself may fail to import there; FINN's own
-binding is not affected.
+The first time a build needs them, FINN downloads finn-hlslib, board files and its other
+resources into ``~/.finn``, and builds its link to the Vivado simulator for your release.
+To prepare a machine that will be offline, run ``finn resources fetch --all`` and
+``python -m finn.xsi.setup`` while it is online.
+
+``finn doctor`` also lists what FINN knows about your release that its installation does
+not show: a release's own behaviour, and what FINN does about it. With Vitis 2026.2, for
+example, ``settings64.sh`` makes every Python load an older C++ runtime, so extensions you
+compile yourself may fail to import there; FINN's own extension is not affected.
 
 Vivado/Vitis licence
 ********************
 
-If you are targeting Xilinx FPGA parts that need specific licences (non-WebPack), set
-AMD's own variable before starting FINN, natively or with ``docker/run``, which mounts
-a licence file into the container at the same path::
+If you target FPGA parts that need a licence (outside the free Standard edition), set
+AMD's licence variable before you start FINN, natively or with ``docker/run``. The
+container mounts a licence file at the same path::
 
   export XILINXD_LICENSE_FILE=2100@licence-server      # or /path/to/licence.lic
 
@@ -216,36 +304,38 @@ by using the "advanced mode" described in the :ref:`command_line` section.
 Running FINN
 ============
 
-Natively, FINN's commands run in the activated environment, in a shell that sourced
-the AMD tools. In the container, the same commands follow ``./docker/run --fpga --``
-(``--fpga`` requires the AMD tools; leave it out for software-only runs).
+Without Docker, run FINN's commands in the activated environment, in a shell where you
+set up the AMD tools. In the container, put ``./docker/run --fpga --`` before the same
+commands. ``--fpga`` makes the container require the AMD tools; leave it out for runs
+that need no tools.
 
 Launch a Build with ``build_dataflow``
 **************************************
 
-Natively, from anywhere::
+Without Docker, run a build from anywhere::
 
   build_dataflow /path/to/model
   cd /path/to/model && python build.py
 
-The container mounts the FINN checkout and the working directory at their own paths.
-For a model directory elsewhere, run from it, or mount it explicitly::
+The container sees the FINN checkout and the directory you start it from, at their own
+paths. For a model directory elsewhere, start it from there, or mount the directory::
 
   cd /path/to/model && /path/to/finn/docker/run --fpga -- build_dataflow /path/to/model
   ./docker/run --fpga -v "/path/to/model:/path/to/model" -- python /path/to/model/build.py
 
-Vitis/Alveo builds in the container additionally select the XRT userspace runtime with
-``--runtime xrt``; natively, source XRT's ``setup.sh`` as well. See :ref:`command_line`
+For Vitis/Alveo builds, add ``--runtime xrt`` in the container, which adds AMD's XRT
+runtime to it. Without Docker, source XRT's ``setup.sh`` as well. See :ref:`command_line`
 for the build modes.
 
 Launch Jupyter notebooks
 ************************
 
-The notebooks are in the checkout. Natively, with the locked environment::
+The notebooks are in the checkout. Without Docker, in the environment of
+`Install from a checkout`_, run this in the checkout::
 
   jupyter notebook notebooks
 
-In the container, which serves them with token authentication::
+In the container, which serves them with token authentication, run::
 
   ./docker/run --fpga --notebook
 
@@ -255,24 +345,27 @@ Open the token URL printed by Jupyter. ``JUPYTER_PORT`` defaults to 8888 and
 Where FINN keeps files
 **********************
 
-* ``FINN_BUILD_DIR`` selects the disposable build directory (default ``/tmp/finn_build_<uid>``).
-  For larger networks it may need tens of GB; a fast SSD gives quicker builds. Generated
-  projects refer to it, so a build is lost when ``/tmp`` is cleared at reboot unless you
-  move it elsewhere.
-* ``FINN_HOME`` selects persistent state such as resources and XSim binding builds
-  (default ``~/.finn``); ``FINN_RESOURCES_DIR``, ``FINN_XSI_PATH`` and ``FINN_GOLDEN_DIR``
-  move parts of it elsewhere. Deleting it costs only downloads and rebuilds.
-* ``NUM_DEFAULT_WORKERS`` sets how many processes FINN's parallel transformations, such
-  as HLS synthesis, use: 1 natively unless set, 4 in the container.
+FINN reads these environment variables, without Docker and in the container:
+
+* ``FINN_BUILD_DIR`` is the directory for build output, by default ``/tmp/finn_build_<uid>``.
+  For larger networks it may need tens of GB, and a fast SSD gives quicker builds. Many
+  systems clear ``/tmp`` at reboot, and the generated projects refer to this directory,
+  so set it to a directory elsewhere to keep builds.
+* ``FINN_HOME`` is the directory where FINN keeps what it downloads and builds once:
+  finn-hlslib, board files, and its link to the Vivado simulator. It is ``~/.finn`` by
+  default. Deleting it costs only downloads and rebuilds.
+* ``NUM_DEFAULT_WORKERS`` sets how many processes FINN uses for work it parallelizes,
+  such as HLS synthesis. It is 1 unless you set it; the container sets it to 4.
 
 ``docker/README.md`` in the checkout lists every variable.
 
 The container
 =============
 
-``docker/run`` builds the image when it is missing and installs the mounted FINN
-checkout in it, editable. Start a shell; with a release's ``settings64.sh`` sourced
-(``XILINX_VIVADO`` set), the tools and your licence settings come along::
+``docker/run`` builds the container's image when it is missing, and uses the FINN
+checkout it is in, so your changes to the checkout take effect at once. To start a
+shell in the container, with the AMD tools and your licence settings from your shell,
+run::
 
   source /tools/Xilinx/2025.2/Vivado/settings64.sh
   export XILINXD_LICENSE_FILE=2100@licence-server
@@ -287,11 +380,11 @@ Environment variables
 *********************
 
 The container takes AMD's own variables from your shell: ``XILINX_VIVADO`` (the
-install root it lies in is mounted read-only, and the container sources that
+container mounts the AMD installation it lies in, read-only, and sources that
 release's ``settings64.sh``), ``XILINXD_LICENSE_FILE`` and ``LM_LICENSE_FILE``
 (licence files are mounted), ``PLATFORM_REPO_PATHS`` and
-``FINN_TOOL_DIR_OVERRIDE`` (site tool wrappers, such as LSF). Both AMD
-installation layouts work. Software runs need no tools.
+``FINN_TOOL_DIR_OVERRIDE`` (a directory of your site's tool wrappers, such as for a
+compute farm). Runs that need no tools work without them.
 
 * ``FINN_BUILD_DIR`` and ``FINN_HOME`` are read from your shell and mounted at their own paths.
 * ``-e NAME[=VALUE]`` passes further variables (``NUM_DEFAULT_WORKERS``, ``FINN_XELAB_MT``), ``-v SOURCE:TARGET`` further mounts; ``COMPOSE_FILE`` adds your own Compose files.
@@ -299,9 +392,26 @@ installation layouts work. Software runs need no tools.
 * ``finn resources golden`` builds the optional VCK190 golden reference into ``FINN_HOME``.
 
 The container is defined in ``compose.yaml`` and ``compose.tools.yaml``, which
-Dev Containers and agent sandboxes can use directly; ``docker/run --dry-run``
-prints what it would run. See ``docker/README.md`` for images, runtime packages
-and the migration from ``run-docker.sh``.
+Dev Containers can use directly; ``docker/run --dry-run`` prints what it would run.
+See ``docker/README.md`` for images and runtime packages.
+
+Moving from run-docker.sh
+*************************
+
+This section is for existing users. FINN's earlier ``run-docker.sh`` and
+``FINN_XILINX_PATH``/``FINN_XILINX_VERSION`` are replaced by ``docker/run`` and the AMD
+tools of your shell:
+
+* ``./run-docker.sh`` becomes ``./docker/run``; ``./run-docker.sh build_dataflow DIR``
+  becomes ``./docker/run --fpga -v DIR:DIR -- build_dataflow DIR``; ``./run-docker.sh notebook``
+  becomes ``./docker/run --notebook``.
+* Instead of ``FINN_XILINX_PATH`` and ``FINN_XILINX_VERSION``, source the release's
+  ``settings64.sh`` before ``docker/run``. ``docker/run`` still reads the two variables when
+  no release is set up, so existing CI jobs keep working.
+* ``fetch-repos.sh`` and the ``deps/`` directory are gone: FINN fetches what it needs into
+  ``FINN_HOME`` on first use.
+
+``docker/README.md`` in the checkout has the full table, every old variable included.
 
 General container tips
 **********************

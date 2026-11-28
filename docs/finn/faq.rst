@@ -8,9 +8,9 @@ Can't find the answer to your question here? Check `FINN GitHub Discussions <htt
 
 
 Can I install FINN without Docker?
-    Yes. FINN installs into any Python 3.12 environment, and from a checkout ``uv sync``
-    installs its locked environment; FINN's container is the same environment on a known
-    Ubuntu. See :ref:`getting_started`.
+    Yes. You can install FINN into a Python environment in your home directory, without
+    root access, for example on a shared server or a cluster. See
+    :ref:`getting_started:Install FINN without Docker`.
 
 Since FINN uses ONNX, can I compile any model from the ONNX Model Zoo to an FPGA accelerator?
     The short answer is no. FINN uses ONNX in a specific (non-standard) way, including custom layer

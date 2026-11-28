@@ -19,30 +19,35 @@ For more general information about FINN, please visit the [project page](https:/
 
 ## Installation
 
-FINN is a Python package for Linux. It uses the AMD tools (Vivado, Vitis HLS) of the
-shell it starts in: source a release's `settings64.sh` first. Install it natively:
+FINN is a Python package for Linux. It uses the AMD tools (Vivado and Vitis HLS, 2024.2
+or later) for synthesis and simulation, from the shell you start it in: source your
+release's `settings64.sh` first, or load its environment module.
+
+**FINN's container (recommended)**, on your own machine where you can use Docker:
 
 ```bash
-uv venv --python 3.12 finn-env && source finn-env/bin/activate
-uv pip install --torch-backend cpu "finn[brevitas] @ git+https://github.com/Xilinx/finn.git@dev"
-source /tools/Xilinx/2025.2/Vivado/settings64.sh   # synthesis and simulation; optional
-finn doctor                                        # what FINN finds, and what it can run
-```
-
-or run it in its container from a checkout, which needs only Docker:
-
-```bash
-git clone https://github.com/Xilinx/finn.git && cd finn
-source /tools/Xilinx/2025.2/Vivado/settings64.sh   # optional, as natively
-./docker/run -- finn doctor
+git clone https://github.com/Xilinx/finn.git
+cd finn
+source /tools/Xilinx/2025.2/Vivado/settings64.sh   # your release; skip without AMD tools
+./docker/run -- finn doctor                        # what FINN finds, and what it can run
 ./docker/run                                       # a shell in the container
 ```
 
-For notebooks, tests and work on FINN, a checkout with `uv sync` installs the locked
-environment natively. The [Getting Started](https://finn.readthedocs.io/en/latest/getting_started.html)
-page covers requirements, both ways, verifying the installation and running builds;
-[docker/README.md](docker/README.md) covers the environment and the container in depth,
-including the migration from `run-docker.sh`.
+**Without Docker**, on a shared server, a cluster or any machine where you have no root
+access or no Docker. Install [uv](https://docs.astral.sh/uv/) first; everything goes into
+your home directory:
+
+```bash
+uv venv --python 3.12 finn-env
+source finn-env/bin/activate
+uv pip install --torch-backend cpu "finn[brevitas] @ git+https://github.com/Xilinx/finn.git@dev"
+source /tools/Xilinx/2025.2/Vivado/settings64.sh   # your release; skip without AMD tools
+finn doctor
+```
+
+The [Getting Started](https://finn.readthedocs.io/en/latest/getting_started.html) page
+explains each step, what to ask an administrator for on a shared machine, how to check
+the installation, and how to install from a checkout for the notebooks and tests.
 
 ## What's New in FINN?
 

@@ -27,7 +27,7 @@ Prior to running, insure the following prerequisites have been met:
 - Install FINN from a checkout of its repository, natively or as its container; the tutorial is in the checkout. The [Getting Started](https://finn.readthedocs.io/en/latest/getting_started.html#install-finn) section of the FINN documentation describes both.
 - Source your Xilinx release's settings, for example:
 ```shell
-source /opt/Xilinx/2025.2/Vivado/settings64.sh
+source /tools/Xilinx/2025.2/Vivado/settings64.sh
 ```
 
 Then, change to the tutorial's directory in your checkout (`/path/to/finn` below) and invoke the build, natively in the activated environment:
