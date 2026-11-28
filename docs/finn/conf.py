@@ -35,6 +35,11 @@ author = "Y. Umuroglu and J. Petri-Koenig"
 extensions = []
 extensions.append("sphinx.ext.autodoc")
 extensions.append("sphinx.ext.autosectionlabel")
+# Google- and NumPy-style docstring sections (Args:, Parameters, Returns:) as fields,
+# not as headings that autosectionlabel would label once per docstring
+extensions.append("sphinx.ext.napoleon")
+# a dataclass's Attributes: section as fields, since autodoc documents the members too
+napoleon_use_ivar = True
 
 # The docs environment has FINN's runtime only: the front end, notebook,
 # board-side and qonnx's optional imports are mocked for autodoc.

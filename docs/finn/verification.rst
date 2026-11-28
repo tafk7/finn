@@ -5,7 +5,7 @@ Functional Verification
 ***********************
 
 .. image:: ../../notebooks/end2end_example/bnn-pynq/verification.svg
-   :scale: 40%
+   :width: 300px
    :align: center
 
 In a builder flow, these checks are enabled with the ``verify_steps`` option of the build configuration, see :ref:`command_line`.

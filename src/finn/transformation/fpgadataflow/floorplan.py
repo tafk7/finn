@@ -56,15 +56,16 @@ class Floorplan(Transformation):
     """Perform Floorplanning of the dataflow design:
 
     floorplan: path to a JSON containing a dictionary with SLR assignments
-               for each node in the ONNX graph. Must be parse-able by
-               the ApplyConfig transform.
+      for each node in the ONNX graph. Must be parse-able by
+      the ApplyConfig transform.
 
     The transform applies the properties in the supplied JSON then:
-    -Separates DMAs into their own partitions IDs, together with the DWCs
-     attached to them by InsertIODMA,
-    -If not explicitly assigned, assigns DWCs to SLRs to minimize SLLs required
-     (DWCs attached to a DMA follow the SLR of the DMA)
-    -If not explicitly assigned, assigns FIFOs to the SLR of the upstream node
+
+    - Separates DMAs into their own partitions IDs, together with the DWCs
+      attached to them by InsertIODMA,
+    - If not explicitly assigned, assigns DWCs to SLRs to minimize SLLs required
+      (DWCs attached to a DMA follow the SLR of the DMA)
+    - If not explicitly assigned, assigns FIFOs to the SLR of the upstream node
 
     """
 

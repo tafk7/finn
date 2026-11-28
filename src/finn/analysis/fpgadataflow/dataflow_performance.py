@@ -42,24 +42,27 @@ def dataflow_performance(model: ModelWrapper, use_characterized: bool = False) -
     for each node along the critical path.
 
     Preconditions:
+
     - model consists of HLS/RTL nodes, exception are Shuffle nodes
-    they do not need to be specialized yet
+      they do not need to be specialized yet
     - model has cycle estimates annotated (see AnnotateCycles transformation)
     - nodes have unique names (see GiveUniqueNodeNames)
 
     Parameters:
-    - use_characterized : take each node's cycle count from the period of its
-      token access vectors (``io_chrc_period``, see DeriveTokenAccessVectors)
-      instead of the cycles_estimate annotation. Nodes that carry no token
-      access vectors -- fork and join nodes and FIFOs -- count as zero
-      cycles, so max_cycles is the slowest *characterized* node. Note
-      that this makes critical_path_cycles a partial sum; the characterized mode
-      exists to report max_cycles.
+        use_characterized: take each node's cycle count from the period of its
+            token access vectors (``io_chrc_period``, see DeriveTokenAccessVectors)
+            instead of the cycles_estimate annotation. Nodes that carry no token
+            access vectors -- fork and join nodes and FIFOs -- count as zero
+            cycles, so max_cycles is the slowest *characterized* node. Note
+            that this makes critical_path_cycles a partial sum; the characterized mode
+            exists to report max_cycles.
 
     Returns:
-    - max_cycles : number of cycles for slowest node
-    - max_cycles_node_name : name of slowest node
-    - critical_path_cycles : pessimistic expected latency from input to output
+        dict: with the keys
+
+        - max_cycles: number of cycles for slowest node
+        - max_cycles_node_name: name of slowest node
+        - critical_path_cycles: pessimistic expected latency from input to output
     """
     latency_at_node_output: dict[str, Any] = {}
     max_cycles = 0
@@ -111,14 +114,16 @@ def mlo_dataflow_performance(model: ModelWrapper) -> dict[str, Any]:
     here.
 
     Returns:
-    - max_cycles, max_cycles_node_name : as for dataflow_performance, with
-      each FINNLoop taking L * body max_cycles
-    - critical_path_cycles : the latency estimate of dataflow_performance,
-      with each FINNLoop taking its (serial-iteration) cycles_estimate
-    - loops : per FINNLoop, iterations (L), body_max_cycles,
-      body_max_cycles_node_name and loop_cycles (L * body_max_cycles)
-    - outer_max_cycles, outer_max_cycles_node_name : slowest node outside
-      the loops, 0 and "" if there is none
+        dict: with the keys
+
+        - max_cycles, max_cycles_node_name: as for dataflow_performance, with
+          each FINNLoop taking L * body max_cycles
+        - critical_path_cycles: the latency estimate of dataflow_performance,
+          with each FINNLoop taking its (serial-iteration) cycles_estimate
+        - loops: per FINNLoop, iterations (L), body_max_cycles,
+          body_max_cycles_node_name and loop_cycles (L * body_max_cycles)
+        - outer_max_cycles, outer_max_cycles_node_name: slowest node outside
+          the loops, 0 and "" if there is none
     """
     loops = {}
     outer_max_cycles = 0

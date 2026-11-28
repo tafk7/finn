@@ -10,7 +10,7 @@ The example flow in this image starts from a trained PyTorch/Brevitas network an
 As you can see in the picture, FINN has a high modularity and has the property that the flow can be stopped at any point and the intermediate result can be used for further processing or other purposes. This enables a wide range of users to benefit from FINN, even if they do not use the whole flow.
 
 .. image:: ../../notebooks/end2end_example/bnn-pynq/finn-design-flow-example.svg
-   :scale: 50%
+   :width: 800px
    :align: center
 
 The white fields show the state of the network representation in the respective step. The colored fields represent the transformations that are applied to the network to achieve a certain result. The diagram is divided into five sections, each of it includes several flow steps. The flow starts in top left corner with Brevitas export, followed by the preparation of the network for the Vitis HLS and Vivado IPI. There is also a section for testing and verification in software (in the cloud on the right) and the hardware generation and deployment on the PYNQ board.

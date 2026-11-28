@@ -259,8 +259,10 @@ parameters, tells the demux when to stop, and increments for the next iteration.
 #. ``intermediate_frames`` emits ``ID = ID + 1`` back to the mux.
 
 |
+
 .. image:: ../img/mlo/mlo-indexpath.svg
    :align: center
+
 |
 
 
@@ -357,6 +359,7 @@ different parameter sets.
 
 .. image:: ../img/mlo/mlo-complete.svg
    :align: center
+
 |
 
 .. note::

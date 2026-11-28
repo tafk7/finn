@@ -544,10 +544,12 @@ class MVAU(HWCustomOp):
         (local_weight_buffer replays it numInputVectors times) and
         numInputVectors/TH times per frame for TH>1. Each fetch is limited by the
         slower of two stages that each move one transfer per cycle:
-          - the AXI bus: ceil(MH*MW / (DATA_BITS // wbits)) bus words
-          - the VPC into the weight buffer: MH*MW / IWSIMD weight groups,
-            with IWSIMD = SIMD for TH=1 and WSIMD for TH>1 (the smallest divisor
-            of PE*SIMD with PE*SIMD/WSIMD <= TH)
+
+        - the AXI bus: ceil(MH*MW / (DATA_BITS // wbits)) bus words
+        - the VPC into the weight buffer: MH*MW / IWSIMD weight groups,
+          with IWSIMD = SIMD for TH=1 and WSIMD for TH>1 (the smallest divisor
+          of PE*SIMD with PE*SIMD/WSIMD <= TH)
+
         For TH=1 this is slower than the compute whenever PE > numInputVectors,
         for TH>1 whenever WSIMD*wbits > DATA_BITS.
         This is a best case: one AXI beat per cycle, no memory latency."""
