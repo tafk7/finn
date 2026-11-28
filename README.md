@@ -17,9 +17,32 @@ The framework is fully open-source in order to give a higher degree of flexibili
 We have a separate repository [finn-examples](https://github.com/Xilinx/finn-examples) that houses pre-built examples for several neural networks.
 For more general information about FINN, please visit the [project page](https://xilinx.github.io/finn/) and check out the [publications](https://xilinx.github.io/finn/publications).
 
-## Getting Started
+## Installation
 
-Please see the [Getting Started](https://finn.readthedocs.io/en/latest/getting_started.html) page for more information on requirements, installation, and how to run FINN in different modes. Due to the complex nature of the dependencies of the project, **we only support Docker-based execution of the FINN compiler at this time**.
+FINN is a Python package for Linux. It uses the AMD tools (Vivado, Vitis HLS) of the
+shell it starts in: source a release's `settings64.sh` first. Install it natively:
+
+```bash
+uv venv --python 3.12 finn-env && source finn-env/bin/activate
+uv pip install --torch-backend cpu "finn[brevitas] @ git+https://github.com/Xilinx/finn.git@dev"
+source /tools/Xilinx/2025.2/Vivado/settings64.sh   # synthesis and simulation; optional
+finn doctor                                        # what FINN finds, and what it can run
+```
+
+or run it in its container from a checkout, which needs only Docker:
+
+```bash
+git clone https://github.com/Xilinx/finn.git && cd finn
+source /tools/Xilinx/2025.2/Vivado/settings64.sh   # optional, as natively
+./docker/run -- finn doctor
+./docker/run                                       # a shell in the container
+```
+
+For notebooks, tests and work on FINN, a checkout with `uv sync` installs the locked
+environment natively. The [Getting Started](https://finn.readthedocs.io/en/latest/getting_started.html)
+page covers requirements, both ways, verifying the installation and running builds;
+[docker/README.md](docker/README.md) covers the environment and the container in depth,
+including the migration from `run-docker.sh`.
 
 ## What's New in FINN?
 
@@ -27,7 +50,7 @@ Please see the [Getting Started](https://finn.readthedocs.io/en/latest/getting_s
 
 ## Documentation
 
-You can view the documentation on [readthedocs](https://finn.readthedocs.io). Additionally, there is a series of [Jupyter notebook tutorials](https://github.com/Xilinx/finn/tree/main/notebooks), which we recommend running from inside Docker for a better experience.
+You can view the documentation on [readthedocs](https://finn.readthedocs.io). Additionally, there is a series of [Jupyter notebook tutorials](https://github.com/Xilinx/finn/tree/main/notebooks), which run from a checkout, natively or in the container.
 
 ## Community
 
@@ -71,10 +94,3 @@ If you use FINN in your research, please cite the software and the publications 
 
 We previously released an early-stage prototype of a toolflow that took in Caffe-HWGQ binarized network descriptions and produced dataflow architectures. You can find it in the [v0.1](https://github.com/Xilinx/finn/tree/v0.1) branch in this repository.
 Please be aware that this version is deprecated and unsupported, and the main branch does not share history with that branch so it should be treated as a separate repository for all purposes.
-
-FINN's environment is `pyproject.toml` and `uv.lock`, with uv 0.10.0 and Python 3.12.
-Run it natively (`uv sync`, then `source .venv/bin/activate`) or in its container
-(`./docker/run`, which brings the AMD tools of your shell; `--fpga` requires them).
-See [FINN environments](docker/README.md) for both, runtime selection, resources,
-dependency updates and the migration from `run-docker.sh`, and the
-[CI guide](ci/README.md) for the CI image.

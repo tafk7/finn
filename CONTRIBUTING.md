@@ -17,14 +17,14 @@ Please follow the steps below and be sure that your contribution complies with o
 
 	2. Clone the fork to your local computer using *git clone*. Checkout the branch you want to work on.
 
-	3. Please install <a href="https://pre-commit.com/" target="_blank">pre-commit</a> to ensure your code is formatted to our style guidelines. The hooks we use for pre-commit can be found in <a href="https://github.com/Xilinx/finn/blob/main/.pre-commit-config.yaml" target="_blank">this file</a>. For detailed coding standards, please refer to our style guides:
+	3. Install FINN's locked environment in the clone with `uv sync` (see <a href="https://finn.readthedocs.io/en/latest/getting_started.html" target="_blank">Getting Started</a>). It includes <a href="https://pre-commit.com/" target="_blank">pre-commit</a>: run `pre-commit install` once to ensure your code is formatted to our style guidelines. The <a href="https://github.com/Xilinx/finn/blob/dev/ci/README.md" target="_blank">CI guide</a> describes the tests your pull request runs. The hooks we use for pre-commit can be found in <a href="https://github.com/Xilinx/finn/blob/main/.pre-commit-config.yaml" target="_blank">this file</a>. For detailed coding standards, please refer to our style guides:
 		- <a href="https://github.com/Xilinx/finn/blob/dev/rules" target="_blank">Coding rules</a> in <code>rules/</code>: common rules, Python and FINN compiler patterns, C++/HLS and SystemVerilog
 
 	4. Modify the Python source code, Jupyter notebooks and Sphinx documentation etc. as needed.
 
 	5. Use *git add*, *git commit*, *git push* to add changes to your fork.
 
-	6. If you are introducing new functionality, add at least one unit test under the `test/` folder and make sure it passes before you submit the pull request.
+	6. If you are introducing new functionality, add at least one unit test under the `tests/` folder and make sure it passes before you submit the pull request.
 
 	7. Submit a pull request by clicking the *pull request* button on your GitHub repo:
 		1. The <a href="https://github.com/Xilinx/finn" target="_blank">main branch</a> should always be treated as stable and clean. Only hot fixes are allowed to be pull-requested. The hot fix is supposed to be very important such that without this fix, a lot of things will break.
