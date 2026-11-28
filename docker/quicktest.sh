@@ -3,6 +3,8 @@
 set -eo pipefail
 : "${PYTEST_PARALLEL:=auto}"
 
+# the checkout: the container sets FINN_ROOT; natively, the one this script is in
+FINN_ROOT=${FINN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}
 cd "$FINN_ROOT"
 # check if command line argument is empty or not present
 if [ -z "${1:-}" ]; then
